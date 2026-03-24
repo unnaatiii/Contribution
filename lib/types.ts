@@ -13,7 +13,10 @@ export interface GitHubConfig {
 export interface CommitData {
   sha: string;
   message: string;
+  /** Resolved GitHub login when available; otherwise raw git author name */
   author: string;
+  /** Commit author email from git (used to merge profiles & parse noreply login) */
+  authorEmail?: string;
   date: string;
   repo: string;
   repoLabel: string;
@@ -68,6 +71,7 @@ export interface AnalyzedCommit {
   sha: string;
   message: string;
   author: string;
+  authorEmail?: string;
   date: string;
   repo: string;
   repoLabel: string;
@@ -134,6 +138,8 @@ export interface AnalysisResult {
   aiDiagnostics?: AIAnalysisDiagnostics;
   /** Inclusive YYYY-MM-DD range used when fetching from GitHub */
   analysisWindow?: { from: string; to: string };
+  /** GitHub logins included when analysis was restricted (same order as sent) */
+  analysisAllowlist?: string[];
 }
 
 /** Client → analyze API: repos + optional OpenRouter override */
@@ -143,6 +149,8 @@ export interface AnalyzeImpactPayload {
   dateFrom: string;
   dateTo: string;
   openrouterApiKey?: string;
+  /** If set, only commits/reviews/PRs attributed to these logins are analyzed */
+  allowedLogins?: string[];
 }
 
 export interface TeamInsight {

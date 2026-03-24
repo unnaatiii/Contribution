@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Crown, Eye, AlertTriangle, Flame } from "lucide-react";
 import type { AnalysisResult, DeveloperProfile, LeaderboardEntry } from "@/lib/types";
 import { formatIsoWeekLabel } from "@/lib/format-iso-week";
+import { recordDeveloperProfileTransition } from "@/animations/profileTransition";
 
 interface InsightSummaryCardsProps {
   result: AnalysisResult;
@@ -162,11 +163,11 @@ export default function InsightSummaryCards({ result }: InsightSummaryCardsProps
 
   return (
     <section className="mb-8">
-      <div className="flex items-center gap-2 mb-4">
-        <span className="h-1 w-1 rounded-full bg-accent shadow-[0_0_12px_rgba(5,79,153,0.65)]" />
-        <h2 className="text-lg font-semibold text-white tracking-tight">Insights</h2>
+      <div className="flex items-center gap-3 mb-6">
+        <span className="h-2 w-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 shadow-lg shadow-purple-500/50" />
+        <h2 className="text-2xl font-semibold text-white tracking-tight">Insights</h2>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 summary-stagger">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-6 summary-stagger">
         {cards.map((c) => {
           const s = c.style;
           const inner = (
@@ -176,7 +177,7 @@ export default function InsightSummaryCards({ result }: InsightSummaryCardsProps
               >
                 {c.icon}
               </div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8b949e] mb-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-400 mb-2">
                 {c.label}
               </p>
               {c.dev ? (
@@ -187,18 +188,20 @@ export default function InsightSummaryCards({ result }: InsightSummaryCardsProps
                 <p className="text-zinc-500 text-sm">—</p>
               )}
               <p className={`mt-1 text-lg font-bold tabular-nums ${s.metric}`}>{c.primary}</p>
-              <p className="mt-2 text-xs text-[#8b949e] leading-relaxed line-clamp-3">{c.sub}</p>
+              <p className="mt-2 text-xs text-gray-400 leading-relaxed line-clamp-3">{c.sub}</p>
             </>
           );
 
-          const shell = `relative rounded-xl border bg-[var(--cursor-panel)] p-4 transition-all duration-300 animate-fade-rise ${s.border} ${s.ring} hover:border-opacity-80`;
+          const shell = `relative glass-surface glass-surface--lift p-5 animate-fade-rise ${s.border} ${s.ring}`;
 
           if (c.dev) {
             return (
               <Link
                 key={c.key}
                 href={`/developer/${encodeURIComponent(c.dev.login)}`}
-                className={`${shell} block outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]`}
+                scroll={false}
+                onClick={(e) => recordDeveloperProfileTransition(e.currentTarget, c.dev!.login)}
+                className={`${shell} block outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#020617]`}
               >
                 {inner}
               </Link>

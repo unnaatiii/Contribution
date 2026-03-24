@@ -20,18 +20,18 @@ interface ContributionChartsProps {
 }
 
 const COLORS = [
-  "#054f99",
-  "#0a6dbd",
-  "#3d8fd4",
+  "#a855f7",
+  "#6366f1",
+  "#3b82f6",
+  "#8b5cf6",
   "#34d399",
   "#fbbf24",
   "#f87171",
-  "#7eb8e8",
   "#c084fc",
 ];
 
 const typeColors: Record<string, string> = {
-  feature: "#054f99",
+  feature: "#a855f7",
   bug_fix: "#f87171",
   refactor: "#34d399",
   test: "#a78bfa",
@@ -39,15 +39,15 @@ const typeColors: Record<string, string> = {
 };
 
 const repoTypeColors: Record<string, string> = {
-  frontend: "#0a6dbd",
+  frontend: "#6366f1",
   backend: "#fbbf24",
   erp: "#c084fc",
 };
 
 /** Recharts default tooltip band uses fill #ccc — override for dark UI */
 const CHART_TOOLTIP_CURSOR = {
-  fill: "rgba(5, 79, 153, 0.09)",
-  stroke: "rgba(5, 79, 153, 0.28)",
+  fill: "rgba(168, 85, 247, 0.1)",
+  stroke: "rgba(147, 51, 234, 0.35)",
   strokeWidth: 1,
 } as const;
 
@@ -65,8 +65,8 @@ const CustomTooltip = ({
 }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-[var(--cursor-border)] bg-[var(--cursor-elevated)] px-3 py-2 shadow-xl shadow-black/40">
-      <p className="text-xs text-[#8b949e] mb-1">{label}</p>
+    <div className="rounded-xl border border-white/15 bg-slate-900/90 backdrop-blur-xl px-3 py-2 shadow-2xl shadow-black/50">
+      <p className="text-xs text-gray-400 mb-1">{label}</p>
       {payload.map((item, i) => (
         <p key={i} className="text-sm font-medium" style={{ color: item.color }}>
           {item.name}: {typeof item.value === "number" ? item.value.toFixed(1) : item.value}
@@ -111,14 +111,16 @@ export default function ContributionCharts({
 
   return (
     <div className="space-y-6 animate-fade-rise">
-      <div className="flex items-center gap-2 mb-2">
-        <BarChart3 className="w-5 h-5 text-accent" />
-        <h2 className="text-lg font-semibold text-white">Analytics</h2>
+      <div className="flex items-center gap-3 mb-2">
+        <div className="p-2 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 ring-1 ring-white/10">
+          <BarChart3 className="w-5 h-5 text-purple-300" />
+        </div>
+        <h2 className="text-2xl font-semibold text-white tracking-tight">Analytics</h2>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 stagger-animate">
-        <div className="cursor-panel rounded-xl p-5 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
-          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Impact Score by Developer</h3>
+        <div className="glass-surface p-6 transition-all duration-300 hover:shadow-2xl hover:border-white/15 hover:shadow-purple-500/5 animate-fade-rise">
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Impact Score by Developer</h3>
           <ResponsiveContainer width="100%" height={340}>
             <BarChart
               data={impactBarData}
@@ -155,8 +157,8 @@ export default function ContributionCharts({
           </ResponsiveContainer>
         </div>
 
-        <div className="cursor-panel rounded-xl p-5 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
-          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Contribution Types</h3>
+        <div className="glass-surface p-6 transition-all duration-300 hover:shadow-2xl hover:border-white/15 hover:shadow-blue-500/5 animate-fade-rise">
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Contribution Types</h3>
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
               <Pie
@@ -181,7 +183,7 @@ export default function ContributionCharts({
           </ResponsiveContainer>
           <div className="flex flex-wrap gap-3 justify-center mt-2">
             {pieData.map((entry) => (
-              <div key={entry.name} className="flex items-center gap-1.5 text-xs text-[#8b949e]">
+              <div key={entry.name} className="flex items-center gap-1.5 text-xs text-gray-400">
                 <div
                   className="w-2.5 h-2.5 rounded-full"
                   style={{ backgroundColor: typeColors[entry.name] ?? "#64748b" }}
@@ -192,8 +194,8 @@ export default function ContributionCharts({
           </div>
         </div>
 
-        <div className="cursor-panel rounded-xl p-5 lg:col-span-2 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
-          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Commits by Repository</h3>
+        <div className="glass-surface p-6 lg:col-span-2 transition-all duration-300 hover:shadow-2xl hover:border-white/15 hover:shadow-indigo-500/5 animate-fade-rise">
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Commits by Repository</h3>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart
               data={repoBarData}
@@ -225,7 +227,7 @@ export default function ContributionCharts({
                 {repoBarData.map((item) => (
                   <Cell
                     key={item.name}
-                    fill={repoTypeColors[item.type] ?? "#054f99"}
+                    fill={repoTypeColors[item.type] ?? "#a855f7"}
                     fillOpacity={0.88}
                   />
                 ))}
@@ -234,7 +236,7 @@ export default function ContributionCharts({
           </ResponsiveContainer>
           <div className="flex gap-4 justify-center mt-2">
             {Object.entries(repoTypeColors).map(([type, color]) => (
-              <div key={type} className="flex items-center gap-1.5 text-xs text-[#8b949e]">
+              <div key={type} className="flex items-center gap-1.5 text-xs text-gray-400">
                 <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
                 {type}
               </div>

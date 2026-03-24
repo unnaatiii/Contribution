@@ -15,12 +15,12 @@ interface CommitAnalysisTableProps {
 const impactColors: Record<string, string> = {
   critical: "text-red-400 bg-red-500/10",
   high: "text-amber-400 bg-amber-500/10",
-  medium: "text-accent bg-accent/10",
-  low: "text-zinc-400 bg-zinc-500/10",
+  medium: "text-purple-200 bg-purple-500/15",
+  low: "text-gray-400 bg-slate-500/10",
 };
 
 const typeColors: Record<string, string> = {
-  feature: "text-accent",
+  feature: "text-purple-300",
   bug_fix: "text-red-400",
   refactor: "text-emerald-400",
   test: "text-purple-400",
@@ -48,9 +48,9 @@ export default function CommitAnalysisTable({
     const errs = aiDiagnostics?.recentErrors ?? [];
 
     return (
-      <div className="bg-white/5 border border-white/10 rounded-xl p-6 text-center">
-        <Brain className="w-8 h-8 text-zinc-500 mx-auto mb-3" />
-        <p className="text-sm text-zinc-400">No AI analysis results for this run.</p>
+      <div className="glass-surface p-8 text-center">
+        <Brain className="w-8 h-8 text-gray-500 mx-auto mb-3" />
+        <p className="text-sm text-gray-400">No AI analysis results for this run.</p>
         {!configured ? (
           <p className="text-xs text-zinc-600 mt-2 max-w-md mx-auto">
             Copy <code className="text-zinc-400">.env.example</code> to{" "}
@@ -67,7 +67,7 @@ export default function CommitAnalysisTable({
                 {failures} failed calls, {eligible} commits eligible). Check credits / rate limits on{" "}
                 <a
                   href="https://openrouter.ai/settings/credits"
-                  className="text-accent underline"
+                  className="text-purple-400 underline hover:text-blue-300 transition-colors"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -92,45 +92,47 @@ export default function CommitAnalysisTable({
   const successCount = realCommits.filter((c) => c.analysis).length;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <Brain className="w-5 h-5 text-purple-400" />
-        <h2 className="text-lg font-semibold text-white">AI Commit Analysis</h2>
-        <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent/15 text-accent/90 font-medium">
+    <div className="space-y-6">
+      <div className="flex items-center gap-3 mb-2 flex-wrap">
+        <div className="p-2 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 ring-1 ring-white/10">
+          <Brain className="w-5 h-5 text-purple-300" />
+        </div>
+        <h2 className="text-2xl font-semibold text-white tracking-tight">AI Commit Analysis</h2>
+        <span className="text-[10px] px-2.5 py-1 rounded-full bg-purple-500/15 text-purple-200 font-medium border border-purple-500/25">
           {successCount}/{eligible} analyzed
         </span>
         {modelsUsed.length > 0 && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 ml-auto">
+          <span className="text-[10px] px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 ml-auto">
             {modelsUsed.map((m) => m.split("/").pop()).join(" → ")}
           </span>
         )}
       </div>
 
-      <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+      <div className="glass-surface overflow-hidden p-0">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3 w-10" aria-label="Expand" />
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">When</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">Commit</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">Repo</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">Type</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">Impact</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3">Score</th>
-                <th className="text-left text-xs font-medium text-zinc-400 px-3 py-3 min-w-[200px]">
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 w-10 bg-white/[0.03]" aria-label="Expand" />
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">When</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Commit</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Repo</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Type</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Impact</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Score</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 min-w-[200px] bg-white/[0.03]">
                   AI reasoning
                 </th>
               </tr>
             </thead>
             <tbody>
-              {realCommits.slice(0, 40).map((commit) => {
+              {realCommits.map((commit) => {
                 const a = commit.analysis!;
                 const expanded = expandedSha === commit.sha;
                 return (
                   <Fragment key={commit.sha}>
                     <tr
-                      className="border-b border-white/5 hover:bg-white/[0.02] align-top"
+                      className="border-b border-white/5 hover:bg-white/[0.04] align-top transition-colors duration-300"
                     >
                       <td className="px-3 py-3">
                         <button
@@ -190,9 +192,9 @@ export default function CommitAnalysisTable({
                       </td>
                     </tr>
                     {expanded && (
-                      <tr className="border-b border-white/5 bg-accent/[0.08]">
+                      <tr className="border-b border-white/5 bg-purple-500/[0.06]">
                         <td colSpan={8} className="px-4 py-4">
-                          <div className="rounded-xl border border-white/10 bg-zinc-900/60 p-4 space-y-3">
+                          <div className="rounded-[16px] border border-white/10 bg-slate-950/80 backdrop-blur-xl p-5 space-y-3 shadow-inner">
                             <div className="flex flex-wrap items-center gap-2 text-xs">
                               <span className="text-zinc-500">Full AI analysis</span>
                               <span className="text-zinc-600">·</span>
@@ -226,10 +228,10 @@ export default function CommitAnalysisTable({
                               </p>
                             </div>
                             <div>
-                              <p className="text-[11px] uppercase tracking-wider text-accent/90 mb-1">
+                              <p className="text-[11px] uppercase tracking-wider text-purple-300 mb-1">
                                 Why this score ({a.business_impact_score}/100)
                               </p>
-                              <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap border-l-2 border-accent/40 pl-3">
+                              <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 border-purple-500/40 pl-3">
                                 {a.score_justification ?? a.reasoning}
                               </p>
                             </div>
@@ -260,7 +262,7 @@ export default function CommitAnalysisTable({
                             <button
                               type="button"
                               onClick={() => setExpandedSha(null)}
-                              className="text-xs text-accent hover:text-accent-hover flex items-center gap-1 cursor-pointer"
+                              className="text-xs text-purple-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer transition-colors duration-300"
                             >
                               <ChevronUp className="w-3.5 h-3.5" />
                               Collapse

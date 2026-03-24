@@ -8,13 +8,48 @@ import type {
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-/** Paid/cheap first when credits exist; free tiers as fallback (rate limits). */
+/**
+ * Free / :free models first so analysis works with $0 OpenRouter credits.
+ * Paid models follow for accounts with balance (402 skipped → next model).
+ * `mistralai/` prefix required — bare `mistral-small-...` is not a valid OpenRouter ID.
+ */
 const MODELS = [
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "mistralai/mistral-small-3.1-24b-instruct:free",
+  "qwen/qwen3-4b:free",
+  "openrouter/free",
   "google/gemini-2.0-flash-001",
   "deepseek/deepseek-chat",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "mistral-small-3.1-24b-instruct:free",
 ] as const;
+
+function analysisModelOrder(): string[] {
+  const primary = process.env.OPENROUTER_ANALYSIS_MODEL?.trim();
+  if (primary) {
+    const rest = [...MODELS].filter((m) => m !== primary);
+    return [primary, ...rest];
+  }
+  return [...MODELS];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Some providers reject `seed`; omit for :free and aggregate routers. */
+function modelSupportsSeed(model: string): boolean {
+  if (model.includes(":free") || model === "openrouter/free") return false;
+  return true;
+}
+
+/** Same commit → same seed so providers that honor `seed` return stable scores. */
+function deterministicSeedFromSha(sha: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < sha.length; i++) {
+    h ^= sha.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 42;
+}
 
 export type AIBatchDiagnostics = {
   openrouterConfigured: boolean;
@@ -44,6 +79,8 @@ REQUIRED JSON FIELDS (all mandatory, use arrays of short strings):
 - affected_modules_and_flows: 3–10 items naming concrete modules, routes, APIs, screens, jobs, or user journeys touched or downstream (infer from paths if needed)
 
 If diff is missing: state uncertainty in score_justification; cap score at 72 unless message implies outage/security/data loss.
+
+Determinism: Same evidence should yield the same type, impact_level, and business_impact_score band. Do not randomize. The AUTHOR line may be an unlinked local git name — judge only the code/message; never use author identity to raise or lower the score.
 
 OUTPUT: ONE raw JSON object only — no markdown fences, no extra keys:
 {"type":"...","impact_level":"...","business_impact_score":<int>,"reasoning":"...","parameters_considered":["..."],"score_justification":"...","affected_modules_and_flows":["..."]}`;
@@ -135,7 +172,13 @@ export class AIAnalyzer {
 
     const analyzed: AnalyzedCommit[] = [];
 
-    for (const commit of realCommits) {
+    const pacingMs = Math.max(
+      0,
+      Number.parseInt(process.env.OPENROUTER_COMMIT_DELAY_MS ?? "180", 10) || 0,
+    );
+
+    for (let i = 0; i < realCommits.length; i++) {
+      const commit = realCommits[i];
       if (!this.apiKey) {
         analyzed.push(this.toAnalyzedCommit(commit, null, "none"));
         continue;
@@ -144,7 +187,7 @@ export class AIAnalyzer {
       let analysis: AICommitAnalysis | null = null;
       let modelUsed = "none";
 
-      for (const model of MODELS) {
+      for (const model of analysisModelOrder()) {
         const result = await this.callModel(model, commit);
         if (result) {
           analysis = result;
@@ -158,6 +201,10 @@ export class AIAnalyzer {
       }
 
       analyzed.push(this.toAnalyzedCommit(commit, analysis, modelUsed));
+
+      if (pacingMs > 0 && i < realCommits.length - 1) {
+        await sleep(pacingMs);
+      }
     }
 
     for (const mc of mergeCommits) {
@@ -211,24 +258,39 @@ Return the JSON object now.`;
     try {
       console.log(`[AI] ${model} → ${commit.sha.slice(0, 7)} (${commit.repoLabel})`);
 
-      const res = await fetch(OPENROUTER_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER || "https://localhost:3000",
-          "X-Title": "DevImpact AI",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.12,
-          max_tokens: 1400,
-        }),
-      });
+      const baseBody: Record<string, unknown> = {
+        model,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0,
+        max_tokens: 1400,
+      };
+      if (modelSupportsSeed(model)) {
+        baseBody.seed = deterministicSeedFromSha(commit.sha);
+      }
+
+      const doFetch = () =>
+        fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER || "https://localhost:3000",
+            "X-Title": "DevImpact AI",
+          },
+          body: JSON.stringify(baseBody),
+        });
+
+      let res = await doFetch();
+
+      if (res.status === 429) {
+        const retryAfter = 2200;
+        console.log(`[AI] ${model} HTTP 429 — retry once after ${retryAfter}ms`);
+        await sleep(retryAfter);
+        res = await doFetch();
+      }
 
       if (!res.ok) {
         const errBody = await res.text().catch(() => "");
@@ -327,6 +389,7 @@ Return the JSON object now.`;
       sha: commit.sha,
       message: commit.message,
       author: commit.author,
+      authorEmail: commit.authorEmail,
       date: commit.date,
       repo: commit.repo,
       repoLabel: commit.repoLabel,

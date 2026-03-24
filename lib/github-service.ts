@@ -6,6 +6,33 @@ import type {
   ReviewData,
   MultiRepoData,
 } from "./types";
+import { parseNoreplyGithubLogin } from "./commit-author";
+
+/** Skip unhelpful GitHub system accounts when using committer as fallback */
+const SKIP_COMMITTER_LOGINS = /^(web-flow|ghost)$/i;
+
+function resolveCommitAuthorLogin(commit: {
+  author: { login?: string } | null;
+  committer: { login?: string } | null;
+  commit: {
+    author?: { name?: string | null; email?: string | null } | null;
+    committer?: { name?: string | null; email?: string | null } | null;
+  };
+}): string {
+  if (commit.author?.login) return commit.author.login;
+  const cl = commit.committer?.login;
+  if (cl && !SKIP_COMMITTER_LOGINS.test(cl)) return cl;
+
+  const authorEmail = commit.commit.author?.email ?? undefined;
+  const committerEmail = commit.commit.committer?.email ?? undefined;
+  const fromAuthorEmail = parseNoreplyGithubLogin(authorEmail);
+  if (fromAuthorEmail) return fromAuthorEmail;
+  const fromCommitterEmail = parseNoreplyGithubLogin(committerEmail);
+  if (fromCommitterEmail) return fromCommitterEmail;
+
+  const name = commit.commit.author?.name?.trim() || "unknown";
+  return name;
+}
 
 export type GitHubFetchWindow = {
   /** ISO 8601 — commits on/after this instant */
@@ -84,10 +111,14 @@ export class GitHubService {
           }
         }
 
+        const authorEmail =
+          commit.commit.author?.email?.trim() || commit.commit.committer?.email?.trim() || undefined;
+
         commits.push({
           sha: commit.sha,
           message: commit.commit.message,
-          author: commit.author?.login ?? commit.commit.author?.name ?? "unknown",
+          author: resolveCommitAuthorLogin(commit),
+          authorEmail: authorEmail || undefined,
           date: commit.commit.author?.date ?? "",
           repo: `${repo.owner}/${repo.repo}`,
           repoLabel: repo.label,

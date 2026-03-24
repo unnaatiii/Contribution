@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import GlobalPageEffects from "@/components/GlobalPageEffects";
+import { AnalysisSessionProvider } from "@/components/AnalysisSessionProvider";
+import { LayoutGroup } from "framer-motion";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,7 +30,14 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col app-bg-saas text-slate-50 antialiased">
+        <GlobalPageEffects />
+        <AnalysisSessionProvider>
+          <LayoutGroup id="devimpact-ui">
+            <div className="relative z-10 flex min-h-full flex-1 flex-col">{children}</div>
+          </LayoutGroup>
+        </AnalysisSessionProvider>
+      </body>
     </html>
   );
 }

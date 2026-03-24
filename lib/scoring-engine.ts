@@ -10,6 +10,11 @@ import type {
   RepoConfig,
 } from "./types";
 import { AIAnalyzer } from "./ai-analyzer";
+import {
+  contributorAvatarUrl,
+  isResolvableContributorKey,
+  resolveProfileKey,
+} from "./commit-author";
 
 const TYPE_WEIGHTS: Record<ContributionType, number> = {
   feature: 10,
@@ -75,7 +80,7 @@ export class ScoringEngine {
       if (!devMap.has(login)) {
         devMap.set(login, {
           login,
-          avatar_url: `https://github.com/${login}.png`,
+          avatar_url: contributorAvatarUrl(login),
           role: "developer",
           totalCommits: 0,
           meaningfulCommits: 0,
@@ -96,7 +101,12 @@ export class ScoringEngine {
     };
 
     for (const commit of analyzedCommits) {
-      const dev = ensureProfile(commit.author);
+      const profileKey = resolveProfileKey(commit.author, commit.authorEmail);
+      if (!isResolvableContributorKey(profileKey)) {
+        continue;
+      }
+
+      const dev = ensureProfile(profileKey);
       dev.totalCommits++;
       dev.commits.push(commit);
 
@@ -131,7 +141,9 @@ export class ScoringEngine {
     }
 
     for (const review of data.reviews) {
-      const dev = ensureProfile(review.reviewer);
+      const rk = resolveProfileKey(review.reviewer, undefined);
+      if (!isResolvableContributorKey(rk)) continue;
+      const dev = ensureProfile(rk);
       dev.totalReviews++;
       if (review.state === "APPROVED") dev.prsApproved++;
     }
@@ -214,7 +226,7 @@ export class ScoringEngine {
 
   private buildLeaderboard(profiles: DeveloperProfile[]): LeaderboardEntry[] {
     return profiles
-      .filter((d) => d.role === "developer")
+      .filter((d) => d.role === "developer" && isResolvableContributorKey(d.login))
       .sort((a, b) => b.impactScore - a.impactScore)
       .map((dev, i) => ({
         rank: i + 1,
