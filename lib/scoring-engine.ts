@@ -1,304 +1,286 @@
 import type {
-  RepositoryData,
+  MultiRepoData,
+  AnalyzedCommit,
   DeveloperProfile,
   LeaderboardEntry,
-  AnalysisResult,
   TeamInsight,
-  ImpactAnalysis,
+  AnalysisResult,
   ContributionType,
-  WeeklyScore,
-  DeveloperInsight,
+  ContributorRole,
+  RepoConfig,
 } from "./types";
 import { AIAnalyzer } from "./ai-analyzer";
+
+const TYPE_WEIGHTS: Record<ContributionType, number> = {
+  feature: 10,
+  bug_fix: 8,
+  refactor: 6,
+  test: 5,
+  chore: 2,
+};
+
+const IMPACT_MULTIPLIER: Record<string, number> = {
+  critical: 4.0,
+  high: 2.5,
+  medium: 1.5,
+  low: 1.0,
+};
+
+const REPO_WEIGHT: Record<string, number> = {
+  frontend: 1.2,
+  backend: 1.5,
+  erp: 1.1,
+};
+
+const MANAGER_LOGIN = "abhishekpandey";
 
 export class ScoringEngine {
   private analyzer: AIAnalyzer;
 
-  constructor(openaiApiKey?: string) {
-    this.analyzer = new AIAnalyzer(openaiApiKey);
+  constructor(openrouterApiKey?: string) {
+    this.analyzer = new AIAnalyzer(openrouterApiKey);
   }
 
-  async analyzeRepository(repoData: RepositoryData): Promise<AnalysisResult> {
-    const developerMap = new Map<string, DeveloperProfile>();
+  async analyzeMultiRepo(data: MultiRepoData): Promise<AnalysisResult> {
+    console.log(`[Engine] Starting analysis of ${data.commits.length} commits across ${data.repos.length} repos`);
 
-    for (const contributor of repoData.contributors) {
-      developerMap.set(contributor.login, {
-        login: contributor.login,
-        avatar_url: contributor.avatar_url,
-        html_url: contributor.html_url,
-        totalImpactScore: 0,
-        totalCommits: 0,
-        totalPRs: 0,
-        mergedPRs: 0,
-        prAcceptanceRate: 0,
-        totalIssues: 0,
-        contributionBreakdown: {
-          feature: 0,
-          bugfix: 0,
-          refactor: 0,
-          documentation: 0,
-          test: 0,
-          chore: 0,
-          performance: 0,
-          security: 0,
-        },
-        impactBreakdown: {
-          businessValue: 0,
-          complexity: 0,
-          codeQuality: 0,
-          frequency: 0,
-        },
-        weeklyScores: [],
-        insights: [],
-        tier: "growing",
-      });
-    }
-
-    const commitAnalyses = new Map<string, ImpactAnalysis[]>();
-
-    for (const commit of repoData.commits) {
-      const analysis = await this.analyzer.classifyCommit(commit);
-      const existing = commitAnalyses.get(commit.author) ?? [];
-      existing.push(analysis);
-      commitAnalyses.set(commit.author, existing);
-
-      const profile = developerMap.get(commit.author);
-      if (profile) {
-        profile.totalCommits++;
-        profile.totalImpactScore += analysis.impactScore;
-        profile.contributionBreakdown[analysis.classification.type]++;
-        profile.impactBreakdown.businessValue += analysis.businessValue;
-        profile.impactBreakdown.complexity += analysis.complexity;
-        profile.impactBreakdown.codeQuality += analysis.codeQuality;
-      }
-    }
-
-    for (const pr of repoData.pullRequests) {
-      const analysis = await this.analyzer.classifyPR(pr);
-      const profile = developerMap.get(pr.author);
-      if (profile) {
-        profile.totalPRs++;
-        if (pr.merged) profile.mergedPRs++;
-        profile.totalImpactScore += analysis.impactScore;
-        profile.contributionBreakdown[analysis.classification.type]++;
-        profile.impactBreakdown.businessValue += analysis.businessValue;
-        profile.impactBreakdown.complexity += analysis.complexity;
-        profile.impactBreakdown.codeQuality += analysis.codeQuality;
-      }
-    }
-
-    for (const issue of repoData.issues) {
-      const profile = developerMap.get(issue.author);
-      if (profile) {
-        profile.totalIssues++;
-      }
-    }
-
-    const developers = Array.from(developerMap.values()).filter(
-      (d) => d.totalCommits > 0 || d.totalPRs > 0,
-    );
-
-    for (const dev of developers) {
-      dev.prAcceptanceRate =
-        dev.totalPRs > 0 ? Math.round((dev.mergedPRs / dev.totalPRs) * 100) : 0;
-
-      const total = dev.totalCommits + dev.totalPRs;
-      if (total > 0) {
-        dev.impactBreakdown.businessValue = Math.round(dev.impactBreakdown.businessValue / total);
-        dev.impactBreakdown.complexity = Math.round(dev.impactBreakdown.complexity / total);
-        dev.impactBreakdown.codeQuality = Math.round(dev.impactBreakdown.codeQuality / total);
-      }
-      dev.impactBreakdown.frequency = Math.min(10, Math.round(total / 5));
-
-      dev.weeklyScores = this.computeWeeklyScores(dev.login, repoData);
-      dev.insights = this.generateInsights(dev);
-      dev.tier = this.assignTier(dev);
-    }
-
-    developers.sort((a, b) => b.totalImpactScore - a.totalImpactScore);
-
-    const leaderboard: LeaderboardEntry[] = developers.map((dev, idx) => ({
-      rank: idx + 1,
-      developer: { ...dev, rank: idx + 1 },
-      badge: this.assignBadge(dev, idx),
-    }));
-
-    const teamInsights = this.generateTeamInsights(developers);
-    const sprintTop = leaderboard[0] ?? null;
+    const analyzedCommits = await this.analyzer.analyzeAllCommits(data.commits);
+    const profiles = this.buildProfiles(analyzedCommits, data);
+    const leaderboard = this.buildLeaderboard(profiles);
+    const teamInsights = this.generateTeamInsights(profiles, data.repos);
 
     return {
-      repository: { owner: repoData.owner, repo: repoData.repo },
-      developers,
+      repos: data.repos,
+      developers: profiles,
       leaderboard,
-      sprintTopContributor: sprintTop,
+      analyzedCommits,
+      topContributor: leaderboard[0] ?? null,
       teamInsights,
       analyzedAt: new Date().toISOString(),
+      aiPowered: this.analyzer.isAIPowered,
+      modelsUsed: this.analyzer.modelNames,
+      commitCount: analyzedCommits.length,
+      repoCount: data.repos.length,
+      aiDiagnostics: this.analyzer.lastBatchDiagnostics,
     };
   }
 
-  private computeWeeklyScores(login: string, repoData: RepositoryData): WeeklyScore[] {
-    const weekMap = new Map<string, WeeklyScore>();
-    const userCommits = repoData.commits.filter((c) => c.author === login);
-    const userPRs = repoData.pullRequests.filter((p) => p.author === login);
+  private buildProfiles(
+    analyzedCommits: AnalyzedCommit[],
+    data: MultiRepoData,
+  ): DeveloperProfile[] {
+    const devMap = new Map<string, DeveloperProfile>();
 
-    for (const commit of userCommits) {
-      const week = this.getWeekLabel(commit.date);
-      const entry = weekMap.get(week) ?? { week, score: 0, commits: 0, prs: 0 };
-      entry.commits++;
-      entry.score += 5;
-      weekMap.set(week, entry);
+    const ensureProfile = (login: string): DeveloperProfile => {
+      if (!devMap.has(login)) {
+        devMap.set(login, {
+          login,
+          avatar_url: `https://github.com/${login}.png`,
+          role: "developer",
+          totalCommits: 0,
+          meaningfulCommits: 0,
+          mergeCommits: 0,
+          reposContributed: [],
+          impactScore: 0,
+          avgBusinessImpact: 0,
+          commits: [],
+          breakdown: { feature: 0, bug_fix: 0, refactor: 0, test: 0, chore: 0 },
+          repoBreakdown: {},
+          totalReviews: 0,
+          prsApproved: 0,
+          insights: [],
+          tier: "growing",
+        });
+      }
+      return devMap.get(login)!;
+    };
+
+    for (const commit of analyzedCommits) {
+      const dev = ensureProfile(commit.author);
+      dev.totalCommits++;
+      dev.commits.push(commit);
+
+      if (commit.isMergeCommit) {
+        dev.mergeCommits++;
+        continue;
+      }
+
+      dev.meaningfulCommits++;
+
+      if (!dev.reposContributed.includes(commit.repoLabel)) {
+        dev.reposContributed.push(commit.repoLabel);
+      }
+
+      if (!dev.repoBreakdown[commit.repoLabel]) {
+        dev.repoBreakdown[commit.repoLabel] = { commits: 0, score: 0 };
+      }
+      dev.repoBreakdown[commit.repoLabel].commits++;
+
+      if (commit.analysis) {
+        const { type, impact_level, business_impact_score } = commit.analysis;
+        dev.breakdown[type]++;
+
+        const repoW = REPO_WEIGHT[commit.repoType] ?? 1.0;
+        const typeW = TYPE_WEIGHTS[type] ?? 2;
+        const impactM = IMPACT_MULTIPLIER[impact_level] ?? 1.0;
+
+        const commitScore = typeW * impactM * repoW + business_impact_score * 0.3;
+        dev.impactScore += commitScore;
+        dev.repoBreakdown[commit.repoLabel].score += commitScore;
+      }
     }
 
-    for (const pr of userPRs) {
-      const week = this.getWeekLabel(pr.created_at);
-      const entry = weekMap.get(week) ?? { week, score: 0, commits: 0, prs: 0 };
-      entry.prs++;
-      entry.score += pr.merged ? 15 : 5;
-      weekMap.set(week, entry);
+    for (const review of data.reviews) {
+      const dev = ensureProfile(review.reviewer);
+      dev.totalReviews++;
+      if (review.state === "APPROVED") dev.prsApproved++;
     }
 
-    return Array.from(weekMap.values()).sort(
-      (a, b) => new Date(a.week).getTime() - new Date(b.week).getTime(),
+    for (const dev of devMap.values()) {
+      if (dev.login.toLowerCase() === MANAGER_LOGIN.toLowerCase()) {
+        dev.role = "manager";
+        dev.impactScore = Math.round(dev.impactScore * 0.2);
+      }
+
+      const hasMeaningful = dev.meaningfulCommits;
+      const analyzedWithScore = dev.commits.filter((c) => c.analysis && !c.isMergeCommit);
+      if (analyzedWithScore.length > 0) {
+        dev.avgBusinessImpact = Math.round(
+          analyzedWithScore.reduce((s, c) => s + (c.analysis?.business_impact_score ?? 0), 0) / analyzedWithScore.length,
+        );
+      }
+
+      dev.impactScore = Math.round(dev.impactScore);
+      dev.tier = this.assignTier(dev);
+      dev.insights = this.generateInsights(dev);
+    }
+
+    return Array.from(devMap.values()).sort((a, b) => b.impactScore - a.impactScore);
+  }
+
+  private assignTier(dev: DeveloperProfile): DeveloperProfile["tier"] {
+    if (dev.role === "manager") return "medium";
+    if (dev.impactScore > 300 && dev.avgBusinessImpact > 60) return "exceptional";
+    if (dev.impactScore > 150) return "high";
+    if (dev.impactScore > 50) return "medium";
+    return "growing";
+  }
+
+  private generateInsights(dev: DeveloperProfile): string[] {
+    const insights: string[] = [];
+
+    if (dev.role === "manager") {
+      insights.push(`Manager role — ${dev.totalReviews} reviews, ${dev.prsApproved} approvals, ${dev.mergeCommits} merges`);
+      return insights;
+    }
+
+    insights.push(
+      "How impact works: each scored commit adds (change-type weight × impact-level multiplier × repo-role weight) + 30% of the AI business score (1–100). Total impact is the sum — not raw commit count. Frontend work can rank high when it fixes user flows, API contracts, uploads, or integrations.",
     );
-  }
 
-  private getWeekLabel(dateStr: string): string {
-    const d = new Date(dateStr);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(d.setDate(diff));
-    return monday.toISOString().split("T")[0];
-  }
-
-  private generateInsights(dev: DeveloperProfile): DeveloperInsight[] {
-    const insights: DeveloperInsight[] = [];
-
-    const topType = (Object.entries(dev.contributionBreakdown) as [ContributionType, number][])
-      .sort(([, a], [, b]) => b - a)[0];
-
-    if (topType && topType[1] > 0) {
-      insights.push({
-        type: "strength",
-        message: `Primary focus area: ${topType[0]} (${topType[1]} contributions)`,
-      });
+    const analyzedCount = dev.commits.filter((c) => c.analysis && !c.isMergeCommit).length;
+    if (analyzedCount > 0 && analyzedCount <= 15 && dev.impactScore >= 120) {
+      insights.push(
+        `High aggregate impact (${dev.impactScore}) from ${analyzedCount} AI-analyzed commit(s): reflects severity, breadth (e.g. cross-repo), and business scores — not how many lines or commits alone.`,
+      );
     }
 
-    if (dev.prAcceptanceRate >= 80 && dev.totalPRs >= 3) {
-      insights.push({
-        type: "highlight",
-        message: `Excellent PR acceptance rate of ${dev.prAcceptanceRate}% across ${dev.totalPRs} PRs`,
-      });
+    if (dev.reposContributed.length > 1) {
+      insights.push(`Cross-repo contributor across ${dev.reposContributed.join(", ")}`);
     }
 
-    if (
-      dev.impactBreakdown.businessValue >= 7 &&
-      dev.impactBreakdown.complexity >= 6
-    ) {
-      insights.push({
-        type: "highlight",
-        message: "Consistently delivers high-value, complex contributions",
-      });
+    if (dev.breakdown.feature > 3) {
+      insights.push(`Feature champion — shipped ${dev.breakdown.feature} features`);
     }
 
-    if (
-      dev.totalCommits > 20 &&
-      dev.totalImpactScore / (dev.totalCommits + dev.totalPRs) < 5
-    ) {
-      insights.push({
-        type: "opportunity",
-        message: "High activity but moderate per-contribution impact. Consider focusing on larger, more impactful changes.",
-      });
+    if (dev.avgBusinessImpact >= 70) {
+      insights.push(`High business impact — avg score ${dev.avgBusinessImpact}/100`);
     }
 
-    if (dev.contributionBreakdown.bugfix > dev.totalCommits * 0.5) {
-      insights.push({
-        type: "strength",
-        message: "Key bug-fixing contributor — critical for product stability",
-      });
+    if (dev.breakdown.bug_fix > 2) {
+      insights.push(`Reliability guardian — fixed ${dev.breakdown.bug_fix} bugs`);
+    }
+
+    if (dev.breakdown.refactor > 2) {
+      insights.push(`Code quality advocate — ${dev.breakdown.refactor} refactors`);
+    }
+
+    if (dev.totalReviews > 3) {
+      insights.push(`Active reviewer — ${dev.totalReviews} reviews, ${dev.prsApproved} approvals`);
     }
 
     return insights;
   }
 
-  private assignTier(dev: DeveloperProfile): DeveloperProfile["tier"] {
-    const avgImpact =
-      dev.totalCommits + dev.totalPRs > 0
-        ? dev.totalImpactScore / (dev.totalCommits + dev.totalPRs)
-        : 0;
-
-    if (avgImpact >= 12 && dev.prAcceptanceRate >= 80) return "exceptional";
-    if (avgImpact >= 8) return "high";
-    if (avgImpact >= 4) return "medium";
-    return "growing";
+  private buildLeaderboard(profiles: DeveloperProfile[]): LeaderboardEntry[] {
+    return profiles
+      .filter((d) => d.role === "developer")
+      .sort((a, b) => b.impactScore - a.impactScore)
+      .map((dev, i) => ({
+        rank: i + 1,
+        developer: dev,
+        badge: this.assignBadge(dev, i),
+      }));
   }
 
   private assignBadge(dev: DeveloperProfile, rank: number): string | undefined {
-    if (rank === 0) return "Most Impactful";
-
-    const topBugfixer = dev.contributionBreakdown.bugfix >= 5;
-    if (topBugfixer) return "Bug Slayer";
-
-    if (dev.contributionBreakdown.feature >= 5) return "Feature Champion";
-    if (dev.prAcceptanceRate >= 90 && dev.totalPRs >= 5) return "Quality Gatekeeper";
-    if (dev.contributionBreakdown.refactor >= 5) return "Code Architect";
-
+    if (rank === 0) return "Top Contributor";
+    if (dev.reposContributed.length > 1) return "Cross-Repo";
+    if (dev.breakdown.feature >= 3) return "Feature Builder";
+    if (dev.avgBusinessImpact >= 70) return "High Impact";
+    if (dev.totalReviews > 5) return "Review Champion";
     return undefined;
   }
 
-  private generateTeamInsights(developers: DeveloperProfile[]): TeamInsight[] {
+  private generateTeamInsights(
+    profiles: DeveloperProfile[],
+    repos: RepoConfig[],
+  ): TeamInsight[] {
     const insights: TeamInsight[] = [];
+    const devs = profiles.filter((d) => d.role === "developer");
 
-    if (developers.length === 0) return insights;
+    const crossRepo = devs.filter((d) => d.reposContributed.length > 1);
+    if (crossRepo.length > 0) {
+      insights.push({
+        category: "collaboration",
+        title: "Cross-Repository Contributors",
+        description: `${crossRepo.length} developer(s) contribute to multiple repos, showing broad system knowledge.`,
+        developers: crossRepo.map((d) => d.login),
+      });
+    }
 
-    const highImpact = developers.filter((d) => d.tier === "exceptional" || d.tier === "high");
+    const highImpact = devs.filter((d) => d.avgBusinessImpact >= 65);
     if (highImpact.length > 0) {
       insights.push({
-        category: "performance",
-        title: "Most Impactful Contributors",
-        description: `${highImpact.length} developer(s) are consistently delivering high-impact contributions.`,
+        category: "impact",
+        title: "High Business Impact",
+        description: `These developers consistently deliver changes with high business value.`,
         developers: highImpact.map((d) => d.login),
       });
     }
 
-    const highEffortLowImpact = developers.filter((d) => {
-      const total = d.totalCommits + d.totalPRs;
-      return total > 10 && d.totalImpactScore / total < 5;
-    });
-    if (highEffortLowImpact.length > 0) {
-      insights.push({
-        category: "opportunity",
-        title: "High Effort, Lower Impact",
-        description:
-          "These contributors are active but could benefit from focusing on higher-impact work.",
-        developers: highEffortLowImpact.map((d) => d.login),
-      });
+    for (const repo of repos) {
+      const repoDevs = devs
+        .filter((d) => d.repoBreakdown[repo.label])
+        .sort((a, b) => (b.repoBreakdown[repo.label]?.score ?? 0) - (a.repoBreakdown[repo.label]?.score ?? 0));
+
+      if (repoDevs.length > 0) {
+        insights.push({
+          category: "repo",
+          title: `${repo.label} — Top Contributors`,
+          description: `${repoDevs.length} developer(s) active. Top: ${repoDevs[0].login} with score ${repoDevs[0].repoBreakdown[repo.label]?.score.toFixed(0)}.`,
+          developers: repoDevs.slice(0, 3).map((d) => d.login),
+        });
+      }
     }
 
-    const hiddenPerformers = developers.filter((d) => {
-      const total = d.totalCommits + d.totalPRs;
-      return total <= 10 && total > 0 && d.totalImpactScore / total >= 10;
-    });
-    if (hiddenPerformers.length > 0) {
+    const managers = profiles.filter((d) => d.role === "manager");
+    if (managers.length > 0) {
       insights.push({
-        category: "discovery",
-        title: "Hidden Performers",
-        description:
-          "These developers have fewer contributions but each one is highly impactful.",
-        developers: hiddenPerformers.map((d) => d.login),
-      });
-    }
-
-    const featureHeavy = developers.filter(
-      (d) =>
-        d.contributionBreakdown.feature >
-        Object.values(d.contributionBreakdown).reduce((a, b) => a + b, 0) * 0.5,
-    );
-    if (featureHeavy.length > 0) {
-      insights.push({
-        category: "focus",
-        title: "Feature-Focused Developers",
-        description: "These developers primarily build new features.",
-        developers: featureHeavy.map((d) => d.login),
+        category: "management",
+        title: "Manager Activity",
+        description: `${managers.map((m) => m.login).join(", ")}: ${managers.reduce((a, m) => a + m.totalReviews, 0)} reviews, ${managers.reduce((a, m) => a + m.prsApproved, 0)} approvals.`,
+        developers: managers.map((d) => d.login),
       });
     }
 

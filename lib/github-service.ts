@@ -1,23 +1,26 @@
 import { Octokit } from "@octokit/rest";
 import type {
-  GitHubConfig,
-  Contributor,
+  RepoConfig,
   CommitData,
   PullRequestData,
-  IssueData,
-  FileChange,
-  RepositoryData,
+  ReviewData,
+  MultiRepoData,
 } from "./types";
+
+export type GitHubFetchWindow = {
+  /** ISO 8601 — commits on/after this instant */
+  since: string;
+  /** ISO 8601 — commits on/before this instant */
+  until: string;
+};
 
 export class GitHubService {
   private octokit: Octokit;
-  private owner: string;
-  private repo: string;
+  private readonly window: GitHubFetchWindow;
 
-  constructor(config: GitHubConfig) {
-    this.octokit = new Octokit({ auth: config.token });
-    this.owner = config.owner;
-    this.repo = config.repo;
+  constructor(token: string, window: GitHubFetchWindow) {
+    this.octokit = new Octokit({ auth: token });
+    this.window = window;
   }
 
   async validateConnection(): Promise<{ valid: boolean; user?: string }> {
@@ -29,201 +32,192 @@ export class GitHubService {
     }
   }
 
-  async fetchContributors(): Promise<Contributor[]> {
-    const contributors: Contributor[] = [];
-    let page = 1;
+  async fetchRepoCommits(repo: RepoConfig): Promise<CommitData[]> {
+    try {
+      console.log(
+        `[GitHub] Fetching commits for ${repo.owner}/${repo.repo} (${this.window.since} … ${this.window.until})`,
+      );
 
-    while (true) {
-      const { data } = await this.octokit.repos.listContributors({
-        owner: this.owner,
-        repo: this.repo,
-        per_page: 100,
-        page,
-      });
-
-      if (data.length === 0) break;
-
-      for (const c of data) {
-        if (c.login) {
-          contributors.push({
-            login: c.login,
-            avatar_url: c.avatar_url ?? "",
-            contributions: c.contributions ?? 0,
-            html_url: c.html_url ?? "",
-          });
-        }
-      }
-
-      if (data.length < 100) break;
-      page++;
-    }
-
-    return contributors;
-  }
-
-  async fetchCommits(since?: string): Promise<CommitData[]> {
-    const commits: CommitData[] = [];
-    let page = 1;
-    const sinceDate = since ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-
-    while (page <= 5) {
       const { data } = await this.octokit.repos.listCommits({
-        owner: this.owner,
-        repo: this.repo,
-        since: sinceDate,
+        owner: repo.owner,
+        repo: repo.repo,
+        since: this.window.since,
+        until: this.window.until,
         per_page: 100,
-        page,
       });
 
-      if (data.length === 0) break;
+      console.log(`[GitHub] Got ${data.length} commits from ${repo.repo}`);
+
+      const commits: CommitData[] = [];
 
       for (const commit of data) {
-        let detail;
-        try {
-          const { data: d } = await this.octokit.repos.getCommit({
-            owner: this.owner,
-            repo: this.repo,
-            ref: commit.sha,
-          });
-          detail = d;
-        } catch {
-          detail = null;
-        }
+        const isMerge =
+          commit.parents.length > 1 ||
+          /^Merge (pull request|branch)/.test(commit.commit.message);
 
-        const files: FileChange[] =
-          detail?.files?.map((f) => ({
-            filename: f.filename ?? "",
-            status: f.status ?? "modified",
-            additions: f.additions ?? 0,
-            deletions: f.deletions ?? 0,
-            patch: f.patch?.substring(0, 500),
-          })) ?? [];
+        let diff = "";
+        let filesChanged: string[] = [];
+        let additions = 0;
+        let deletions = 0;
+
+        if (!isMerge) {
+          try {
+            const { data: detail } = await this.octokit.repos.getCommit({
+              owner: repo.owner,
+              repo: repo.repo,
+              ref: commit.sha,
+            });
+
+            filesChanged = detail.files?.map((f) => f.filename ?? "") ?? [];
+            additions = detail.stats?.additions ?? 0;
+            deletions = detail.stats?.deletions ?? 0;
+
+            diff = (detail.files ?? [])
+              .slice(0, 8)
+              .map((f) => {
+                const patch = (f.patch ?? "").substring(0, 300);
+                return `--- ${f.filename} (${f.status}: +${f.additions}/-${f.deletions})\n${patch}`;
+              })
+              .join("\n\n");
+          } catch {
+            // rate limit or error — continue with basic data
+          }
+        }
 
         commits.push({
           sha: commit.sha,
           message: commit.commit.message,
           author: commit.author?.login ?? commit.commit.author?.name ?? "unknown",
           date: commit.commit.author?.date ?? "",
-          filesChanged: detail?.files?.length ?? 0,
-          additions: detail?.stats?.additions ?? 0,
-          deletions: detail?.stats?.deletions ?? 0,
-          files,
+          repo: `${repo.owner}/${repo.repo}`,
+          repoLabel: repo.label,
+          repoType: repo.repoType,
+          filesChanged,
+          additions,
+          deletions,
+          diff,
+          isMergeCommit: isMerge,
         });
       }
 
-      if (data.length < 100) break;
-      page++;
+      return commits;
+    } catch (err) {
+      console.error(`[GitHub] Failed to fetch ${repo.owner}/${repo.repo}:`, err);
+      return [];
     }
-
-    return commits;
   }
 
-  async fetchPullRequests(state: "open" | "closed" | "all" = "all"): Promise<PullRequestData[]> {
-    const prs: PullRequestData[] = [];
-    let page = 1;
-
-    while (page <= 5) {
+  async fetchRepoPRs(repo: RepoConfig): Promise<PullRequestData[]> {
+    try {
       const { data } = await this.octokit.pulls.list({
-        owner: this.owner,
-        repo: this.repo,
-        state,
-        per_page: 100,
-        page,
+        owner: repo.owner,
+        repo: repo.repo,
+        state: "all",
+        per_page: 20,
         sort: "updated",
         direction: "desc",
       });
 
-      if (data.length === 0) break;
+      const sinceTs = new Date(this.window.since).getTime();
+      const untilTs = new Date(this.window.until).getTime();
 
-      for (const pr of data) {
-        let detail;
-        try {
-          const { data: d } = await this.octokit.pulls.get({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: pr.number,
-          });
-          detail = d;
-        } catch {
-          detail = null;
-        }
-
-        prs.push({
+      return data
+        .filter((pr) => {
+          const t = new Date(pr.created_at).getTime();
+          return t >= sinceTs && t <= untilTs;
+        })
+        .map((pr) => ({
           number: pr.number,
           title: pr.title,
+          body: (pr.body ?? "").substring(0, 300),
           state: pr.state,
-          merged: detail?.merged ?? false,
+          merged: pr.merged_at !== null,
           author: pr.user?.login ?? "unknown",
+          repo: `${repo.owner}/${repo.repo}`,
+          repoLabel: repo.label,
           created_at: pr.created_at,
-          merged_at: detail?.merged_at ?? null,
-          review_comments: detail?.review_comments ?? 0,
-          additions: detail?.additions ?? 0,
-          deletions: detail?.deletions ?? 0,
-          changed_files: detail?.changed_files ?? 0,
-          labels: pr.labels?.map((l) => (typeof l === "string" ? l : l.name ?? "")) ?? [],
-        });
-      }
-
-      if (data.length < 100) break;
-      page++;
+          merged_at: pr.merged_at ?? null,
+        }));
+    } catch {
+      return [];
     }
-
-    return prs;
   }
 
-  async fetchIssues(): Promise<IssueData[]> {
-    const issues: IssueData[] = [];
-    let page = 1;
+  async fetchRepoReviews(repo: RepoConfig, prNumbers: number[]): Promise<ReviewData[]> {
+    const reviews: ReviewData[] = [];
 
-    while (page <= 3) {
-      const { data } = await this.octokit.issues.listForRepo({
-        owner: this.owner,
-        repo: this.repo,
-        state: "all",
-        per_page: 100,
-        page,
-        sort: "updated",
-        direction: "desc",
-      });
+    const results = await Promise.all(
+      prNumbers.slice(0, 15).map(async (prNum) => {
+        try {
+          const { data } = await this.octokit.pulls.listReviews({
+            owner: repo.owner,
+            repo: repo.repo,
+            pull_number: prNum,
+            per_page: 50,
+          });
+          return data.map((r) => ({
+            prNumber: prNum,
+            prTitle: "",
+            reviewer: r.user?.login ?? "unknown",
+            repo: `${repo.owner}/${repo.repo}`,
+            state: r.state as ReviewData["state"],
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
 
-      if (data.length === 0) break;
-
-      for (const issue of data) {
-        if (issue.pull_request) continue;
-
-        issues.push({
-          number: issue.number,
-          title: issue.title,
-          state: issue.state as string,
-          author: issue.user?.login ?? "unknown",
-          labels: issue.labels?.map((l) => (typeof l === "string" ? l : l.name ?? "")) ?? [],
-          created_at: issue.created_at,
-          closed_at: issue.closed_at,
-        });
-      }
-
-      if (data.length < 100) break;
-      page++;
-    }
-
-    return issues;
+    reviews.push(...results.flat());
+    return reviews;
   }
 
-  async fetchAllData(): Promise<RepositoryData> {
-    const [contributors, commits, pullRequests, issues] = await Promise.all([
-      this.fetchContributors(),
-      this.fetchCommits(),
-      this.fetchPullRequests(),
-      this.fetchIssues(),
-    ]);
+  async fetchAllRepos(repos: RepoConfig[]): Promise<MultiRepoData> {
+    console.log(`[GitHub] Fetching data from ${repos.length} repositories`);
+
+    const repoResults = await Promise.all(
+      repos.map(async (repo) => {
+        const [commits, prs] = await Promise.all([
+          this.fetchRepoCommits(repo),
+          this.fetchRepoPRs(repo),
+        ]);
+        const prNumbers = prs.map((p) => p.number);
+        const reviews = await this.fetchRepoReviews(repo, prNumbers);
+        return { commits, prs, reviews };
+      }),
+    );
+
+    const allCommits: CommitData[] = [];
+    const allPRs: PullRequestData[] = [];
+    const allReviews: ReviewData[] = [];
+
+    for (const r of repoResults) {
+      allCommits.push(...r.commits);
+      allPRs.push(...r.prs);
+      allReviews.push(...r.reviews);
+    }
+
+    // filter out bots
+    const sinceTs = new Date(this.window.since).getTime();
+    const untilTs = new Date(this.window.until).getTime();
+
+    const botPatterns = /\[bot\]|dependabot|renovate|github-actions|codecov/i;
+    const filteredCommits = allCommits.filter((c) => {
+      if (botPatterns.test(c.author)) return false;
+      const t = new Date(c.date).getTime();
+      if (Number.isNaN(t)) return false;
+      return t >= sinceTs && t <= untilTs;
+    });
+    const filteredPRs = allPRs.filter((p) => !botPatterns.test(p.author));
+    const filteredReviews = allReviews.filter((r) => !botPatterns.test(r.reviewer));
+
+    console.log(`[GitHub] Total: ${filteredCommits.length} commits, ${filteredPRs.length} PRs, ${filteredReviews.length} reviews across ${repos.length} repos`);
 
     return {
-      owner: this.owner,
-      repo: this.repo,
-      contributors,
-      commits,
-      pullRequests,
-      issues,
+      repos,
+      commits: filteredCommits,
+      pullRequests: filteredPRs,
+      reviews: filteredReviews,
       fetchedAt: new Date().toISOString(),
     };
   }

@@ -1,287 +1,340 @@
-import OpenAI from "openai";
 import type {
   CommitData,
-  PullRequestData,
-  ContributionClassification,
-  ImpactAnalysis,
+  AICommitAnalysis,
+  AnalyzedCommit,
   ContributionType,
+  ImpactLevel,
 } from "./types";
 
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+/** Paid/cheap first when credits exist; free tiers as fallback (rate limits). */
+const MODELS = [
+  "google/gemini-2.0-flash-001",
+  "deepseek/deepseek-chat",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "mistral-small-3.1-24b-instruct:free",
+] as const;
+
+export type AIBatchDiagnostics = {
+  openrouterConfigured: boolean;
+  commitsEligible: number;
+  commitsWithAnalysis: number;
+  modelCallFailures: number;
+  /** Last few distinct error snippets (HTTP body / parse errors) */
+  recentErrors: string[];
+};
+
+const SYSTEM_PROMPT = `You are a staff+ engineer performing a rigorous, evidence-based review of exactly ONE Git commit.
+
+INPUTS (order of trust): (1) unified diff, (2) file paths/extensions, (3) full commit message, (4) line stats (weak).
+
+You MUST produce explicit audit-style output so humans understand WHY a score was chosen.
+
+TYPE RULES (strict): feature | bug_fix | refactor | test | chore — same definitions as before: user-visible behavior vs fix vs internal vs tests-only vs noise.
+
+IMPACT_LEVEL vs business_impact_score (1–100), aligned:
+- critical 85–100, high 70–84, medium 40–69, low 1–39 (security/data/payments can be high despite small diff).
+
+REQUIRED JSON FIELDS (all mandatory, use arrays of short strings):
+- type, impact_level, business_impact_score
+- reasoning: 2–4 sentences — what changed, key evidence from paths/diff
+- parameters_considered: 4–8 bullets you actually weighed (e.g. "correctness of payload to backend", "user-visible form submit path", "type contract FE/BE", "regression risk", "repo role frontend/backend/erp")
+- score_justification: 3–6 sentences that EXPLICITLY tie the numeric business_impact_score to those parameters (e.g. "Score 60 because … not 80 because …"). Mention tradeoffs.
+- affected_modules_and_flows: 3–10 items naming concrete modules, routes, APIs, screens, jobs, or user journeys touched or downstream (infer from paths if needed)
+
+If diff is missing: state uncertainty in score_justification; cap score at 72 unless message implies outage/security/data loss.
+
+OUTPUT: ONE raw JSON object only — no markdown fences, no extra keys:
+{"type":"...","impact_level":"...","business_impact_score":<int>,"reasoning":"...","parameters_considered":["..."],"score_justification":"...","affected_modules_and_flows":["..."]}`;
+
+function extractJsonObject(text: string): string | null {
+  const trimmed = text.trim();
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fence ? fence[1].trim() : trimmed;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  return body.slice(start, end + 1);
+}
+
+/** Keep score bands aligned with impact_level so dashboards stay interpretable. */
+function alignScoreToImpact(score: number, level: ImpactLevel): number {
+  const bands: Record<ImpactLevel, [number, number]> = {
+    critical: [85, 100],
+    high: [70, 84],
+    medium: [40, 69],
+    low: [1, 39],
+  };
+  const [min, max] = bands[level];
+  return Math.min(max, Math.max(min, Math.round(score)));
+}
+
+function asStringArray(v: unknown, max = 14): string[] {
+  if (Array.isArray(v)) {
+    return v.map((x) => String(x).trim()).filter(Boolean).slice(0, max);
+  }
+  if (typeof v === "string" && v.trim()) {
+    return v
+      .split(/[,;\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, max);
+  }
+  return [];
+}
+
 export class AIAnalyzer {
-  private openai: OpenAI | null;
+  private apiKey: string | null;
+  lastBatchDiagnostics: AIBatchDiagnostics;
 
   constructor(apiKey?: string) {
-    this.openai = apiKey ? new OpenAI({ apiKey }) : null;
+    this.apiKey = apiKey?.trim() || null;
+    this.lastBatchDiagnostics = {
+      openrouterConfigured: false,
+      commitsEligible: 0,
+      commitsWithAnalysis: 0,
+      modelCallFailures: 0,
+      recentErrors: [],
+    };
   }
 
-  async classifyCommit(commit: CommitData): Promise<ImpactAnalysis> {
-    if (!this.openai) return this.fallbackAnalysis(commit);
+  get isAIPowered(): boolean {
+    return this.apiKey !== null;
+  }
 
-    const prompt = `Analyze this Git commit and provide an impact assessment.
+  get modelNames(): string[] {
+    return [...MODELS];
+  }
 
-Commit Message: "${commit.message}"
-Files Changed: ${commit.filesChanged}
-Lines Added: ${commit.additions}
-Lines Deleted: ${commit.deletions}
-Files Modified:
-${commit.files
-  .slice(0, 10)
-  .map((f) => `  - ${f.filename} (${f.status}: +${f.additions}/-${f.deletions})`)
-  .join("\n")}
+  private pushError(msg: string) {
+    const short = msg.replace(/\s+/g, " ").slice(0, 180);
+    if (!this.lastBatchDiagnostics.recentErrors.includes(short)) {
+      this.lastBatchDiagnostics.recentErrors.push(short);
+    }
+    if (this.lastBatchDiagnostics.recentErrors.length > 8) {
+      this.lastBatchDiagnostics.recentErrors.shift();
+    }
+  }
 
-Respond in this exact JSON format:
-{
-  "type": "<one of: feature, bugfix, refactor, documentation, test, chore, performance, security>",
-  "confidence": <0.0 to 1.0>,
-  "reasoning": "<one sentence explaining classification>",
-  "businessValue": <1 to 10>,
-  "complexity": <1 to 10>,
-  "codeQuality": <1 to 10>,
-  "summary": "<one sentence impact summary>"
-}
+  async analyzeAllCommits(commits: CommitData[]): Promise<AnalyzedCommit[]> {
+    const realCommits = commits.filter((c) => !c.isMergeCommit);
+    const mergeCommits = commits.filter((c) => c.isMergeCommit);
 
-Scoring guidance:
-- businessValue: How much does this impact users/product? Feature=high, typo fix=low, critical bugfix=very high
-- complexity: How complex is the change? Simple rename=low, algorithm rewrite=high, architectural change=very high
-- codeQuality: Does this improve maintainability? Refactors=high, adding tests=high, quick hacks=low
-- Do NOT just count lines of code. A 5-line security fix is more impactful than a 500-line config change.`;
+    this.lastBatchDiagnostics = {
+      openrouterConfigured: !!this.apiKey,
+      commitsEligible: realCommits.length,
+      commitsWithAnalysis: 0,
+      modelCallFailures: 0,
+      recentErrors: [],
+    };
+
+    console.log(
+      `[AI] Analyzing ${realCommits.length} real commits, skipping ${mergeCommits.length} merge commits (key: ${this.apiKey ? "yes" : "no"})`,
+    );
+
+    const analyzed: AnalyzedCommit[] = [];
+
+    for (const commit of realCommits) {
+      if (!this.apiKey) {
+        analyzed.push(this.toAnalyzedCommit(commit, null, "none"));
+        continue;
+      }
+
+      let analysis: AICommitAnalysis | null = null;
+      let modelUsed = "none";
+
+      for (const model of MODELS) {
+        const result = await this.callModel(model, commit);
+        if (result) {
+          analysis = result;
+          modelUsed = model;
+          break;
+        }
+      }
+
+      if (analysis) {
+        this.lastBatchDiagnostics.commitsWithAnalysis += 1;
+      }
+
+      analyzed.push(this.toAnalyzedCommit(commit, analysis, modelUsed));
+    }
+
+    for (const mc of mergeCommits) {
+      analyzed.push(this.toAnalyzedCommit(mc, null, "skipped"));
+    }
+
+    console.log(
+      `[AI] Done: ${this.lastBatchDiagnostics.commitsWithAnalysis}/${this.lastBatchDiagnostics.commitsEligible} with analysis; ${this.lastBatchDiagnostics.modelCallFailures} failed model calls`,
+    );
+    return analyzed;
+  }
+
+  private async callModel(
+    model: string,
+    commit: CommitData,
+  ): Promise<AICommitAnalysis | null> {
+    const repoContext: Record<string, string> = {
+      frontend:
+        "Repo role: CUSTOMER-FACING FRONTEND. Weight UX, accessibility, performance perceived by users, and broken flows.",
+      backend:
+        "Repo role: BACKEND / APIs / services. Weight correctness, security, data integrity, scalability, and blast radius.",
+      erp: "Repo role: ERP / ADMIN / internal ops. Weight operational risk, reporting accuracy, permissions, and business process breakage.",
+    };
+
+    const diffSection = commit.diff
+      ? `\n\nCODE DIFF (truncated):\n${commit.diff.substring(0, 4500)}`
+      : "\n\nCODE DIFF: (not available — infer carefully from message and file paths only; widen uncertainty, avoid extreme scores unless message clearly implies critical risk.)";
+
+    const paths =
+      commit.filesChanged.length > 0
+        ? commit.filesChanged.slice(0, 40).join("\n")
+        : "(unknown — list not fetched)";
+
+    const userPrompt = `Repository label: "${commit.repoLabel}" (${commit.repoType})
+${repoContext[commit.repoType] ?? repoContext.backend}
+
+COMMIT (first line): ${commit.message.split("\n")[0].slice(0, 240)}
+FULL MESSAGE (may be multi-line, truncated):
+${commit.message.slice(0, 1200)}
+
+AUTHOR: ${commit.author}
+GITHUB REPO: ${commit.repo}
+LINE STATS: +${commit.additions} / -${commit.deletions}
+
+FILES TOUCHED (paths):
+${paths}
+${diffSection}
+
+Return the JSON object now.`;
 
     try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a senior engineering manager analyzing code contributions. Respond only with valid JSON.",
-          },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 300,
+      console.log(`[AI] ${model} → ${commit.sha.slice(0, 7)} (${commit.repoLabel})`);
+
+      const res = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER || "https://localhost:3000",
+          "X-Title": "DevImpact AI",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.12,
+          max_tokens: 1400,
+        }),
       });
 
-      const content = response.choices[0]?.message?.content ?? "{}";
-      const parsed = JSON.parse(content.replace(/```json\n?|\n?```/g, "").trim());
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        this.lastBatchDiagnostics.modelCallFailures += 1;
+        this.pushError(`${model} HTTP ${res.status}: ${errBody.slice(0, 120)}`);
+        console.log(`[AI] ${model} HTTP ${res.status}: ${errBody.slice(0, 200)}`);
+        return null;
+      }
 
-      const classification: ContributionClassification = {
-        type: parsed.type ?? "chore",
-        confidence: Math.min(1, Math.max(0, parsed.confidence ?? 0.5)),
-        reasoning: parsed.reasoning ?? "Unable to determine",
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content ?? "";
+      const jsonStr = extractJsonObject(content);
+      if (!jsonStr) {
+        this.lastBatchDiagnostics.modelCallFailures += 1;
+        this.pushError(`${model}: no JSON in model output`);
+        console.log(`[AI] ${model} parse: no JSON, raw=${content.slice(0, 120)}...`);
+        return null;
+      }
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+      } catch {
+        this.lastBatchDiagnostics.modelCallFailures += 1;
+        this.pushError(`${model}: JSON.parse failed`);
+        return null;
+      }
+
+      const validTypes: ContributionType[] = ["feature", "bug_fix", "refactor", "test", "chore"];
+      const validImpacts: ImpactLevel[] = ["low", "medium", "high", "critical"];
+
+      const rawType = String(parsed.type ?? "").replace(/\s/g, "_").toLowerCase();
+      const normalizedType = rawType === "bugfix" ? "bug_fix" : rawType;
+      const type = validTypes.includes(normalizedType as ContributionType)
+        ? (normalizedType as ContributionType)
+        : "chore";
+
+      const il = String(parsed.impact_level ?? "medium").toLowerCase();
+      const impact_level = validImpacts.includes(il as ImpactLevel) ? (il as ImpactLevel) : "medium";
+
+      const scoreRaw = Number(parsed.business_impact_score);
+      const rawScore = Number.isFinite(scoreRaw)
+        ? Math.min(100, Math.max(1, Math.round(scoreRaw)))
+        : 35;
+      const alignedScore = alignScoreToImpact(rawScore, impact_level);
+
+      const reasoning = String(parsed.reasoning ?? "").trim().slice(0, 900);
+      const scoreJust = String(
+        parsed.score_justification ?? parsed.score_rationale ?? reasoning,
+      )
+        .trim()
+        .slice(0, 1400);
+      const params = asStringArray(parsed.parameters_considered);
+      const flows = asStringArray(parsed.affected_modules_and_flows);
+
+      const result: AICommitAnalysis = {
+        type,
+        impact_level,
+        business_impact_score: alignedScore,
+        reasoning: reasoning || scoreJust.slice(0, 400),
+        parameters_considered:
+          params.length > 0
+            ? params
+            : ["change type & intent", "evidence from message/paths", "user/system blast radius"],
+        score_justification:
+          scoreJust ||
+          `${alignedScore}/100 aligns with ${impact_level} impact for a ${type} change; see reasoning.`,
+        affected_modules_and_flows:
+          flows.length > 0
+            ? flows
+            : commit.filesChanged.length > 0
+              ? commit.filesChanged.slice(0, 6).map((f) => `Touched: ${f}`)
+              : ["Unable to infer modules — no paths in payload"],
       };
 
-      const impactScore = this.calculateImpactScore(
-        parsed.businessValue ?? 5,
-        parsed.complexity ?? 5,
-        parsed.codeQuality ?? 5,
-        classification.type,
+      console.log(
+        `[AI] ${model} OK ${commit.sha.slice(0, 7)}: ${result.type}/${result.impact_level} (${alignedScore})`,
       );
-
-      return {
-        impactScore,
-        businessValue: parsed.businessValue ?? 5,
-        complexity: parsed.complexity ?? 5,
-        codeQuality: parsed.codeQuality ?? 5,
-        classification,
-        summary: parsed.summary ?? "Contribution analyzed",
-      };
-    } catch {
-      return this.fallbackAnalysis(commit);
+      return result;
+    } catch (err) {
+      this.lastBatchDiagnostics.modelCallFailures += 1;
+      this.pushError(`${model}: ${err instanceof Error ? err.message : "unknown"}`);
+      console.log(`[AI] ${model} error: ${err instanceof Error ? err.message : "unknown"}`);
+      return null;
     }
   }
 
-  async classifyPR(pr: PullRequestData): Promise<ImpactAnalysis> {
-    if (!this.openai) return this.fallbackPRAnalysis(pr);
-
-    const prompt = `Analyze this Pull Request and provide an impact assessment.
-
-PR Title: "${pr.title}"
-State: ${pr.state} | Merged: ${pr.merged}
-Lines Added: ${pr.additions} | Lines Deleted: ${pr.deletions}
-Files Changed: ${pr.changed_files}
-Review Comments: ${pr.review_comments}
-Labels: ${pr.labels.join(", ") || "none"}
-
-Respond in this exact JSON format:
-{
-  "type": "<one of: feature, bugfix, refactor, documentation, test, chore, performance, security>",
-  "confidence": <0.0 to 1.0>,
-  "reasoning": "<one sentence explaining classification>",
-  "businessValue": <1 to 10>,
-  "complexity": <1 to 10>,
-  "codeQuality": <1 to 10>,
-  "summary": "<one sentence impact summary>"
-}
-
-Consider:
-- Merged PRs with many review comments suggest thorough, high-quality contributions
-- PRs that fix critical bugs have outsized business value
-- Large feature PRs with tests demonstrate high code quality`;
-
-    try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a senior engineering manager analyzing code contributions. Respond only with valid JSON.",
-          },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 300,
-      });
-
-      const content = response.choices[0]?.message?.content ?? "{}";
-      const parsed = JSON.parse(content.replace(/```json\n?|\n?```/g, "").trim());
-
-      const classification: ContributionClassification = {
-        type: parsed.type ?? "chore",
-        confidence: Math.min(1, Math.max(0, parsed.confidence ?? 0.5)),
-        reasoning: parsed.reasoning ?? "Unable to determine",
-      };
-
-      const mergedBonus = pr.merged ? 1.5 : 0.5;
-      const impactScore =
-        this.calculateImpactScore(
-          parsed.businessValue ?? 5,
-          parsed.complexity ?? 5,
-          parsed.codeQuality ?? 5,
-          classification.type,
-        ) * mergedBonus;
-
-      return {
-        impactScore,
-        businessValue: parsed.businessValue ?? 5,
-        complexity: parsed.complexity ?? 5,
-        codeQuality: parsed.codeQuality ?? 5,
-        classification,
-        summary: parsed.summary ?? "PR analyzed",
-      };
-    } catch {
-      return this.fallbackPRAnalysis(pr);
-    }
-  }
-
-  async generateDeveloperSummary(
-    login: string,
-    stats: {
-      totalScore: number;
-      commits: number;
-      prs: number;
-      mergedPRs: number;
-      breakdown: Record<string, number>;
-    },
-  ): Promise<string> {
-    const prompt = `Summarize this developer's contribution profile in 2-3 sentences.
-
-Developer: ${login}
-Impact Score: ${stats.totalScore.toFixed(1)}
-Commits: ${stats.commits}
-PRs: ${stats.prs} (${stats.mergedPRs} merged)
-Contribution Types: ${Object.entries(stats.breakdown)
-      .filter(([, v]) => v > 0)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(", ")}
-
-Focus on their strengths and impact areas. Be specific and constructive.`;
-
-    if (!this.openai) {
-      return `${login} has contributed ${stats.commits} commits and ${stats.prs} PRs with a total impact score of ${stats.totalScore.toFixed(1)}.`;
-    }
-
-    try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: "You are a thoughtful engineering manager writing performance insights.",
-          },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 150,
-      });
-
-      return response.choices[0]?.message?.content ?? "Analysis complete.";
-    } catch {
-      return `${login} has contributed ${stats.commits} commits and ${stats.prs} PRs with a total impact score of ${stats.totalScore.toFixed(1)}.`;
-    }
-  }
-
-  private calculateImpactScore(
-    businessValue: number,
-    complexity: number,
-    codeQuality: number,
-    type: ContributionType,
-  ): number {
-    const typeWeights: Record<ContributionType, number> = {
-      feature: 2.0,
-      security: 2.5,
-      bugfix: 1.8,
-      performance: 1.6,
-      refactor: 1.3,
-      test: 1.2,
-      documentation: 0.8,
-      chore: 0.5,
-    };
-
-    const weight = typeWeights[type] ?? 1.0;
-
-    return (businessValue * 0.4 + complexity * 0.3 + codeQuality * 0.3) * weight;
-  }
-
-  private fallbackAnalysis(commit: CommitData): ImpactAnalysis {
-    const msg = commit.message.toLowerCase();
-    let type: ContributionType = "chore";
-
-    if (msg.includes("feat") || msg.includes("add") || msg.includes("implement"))
-      type = "feature";
-    else if (msg.includes("fix") || msg.includes("bug") || msg.includes("patch")) type = "bugfix";
-    else if (msg.includes("refactor") || msg.includes("clean")) type = "refactor";
-    else if (msg.includes("doc") || msg.includes("readme")) type = "documentation";
-    else if (msg.includes("test") || msg.includes("spec")) type = "test";
-    else if (msg.includes("perf") || msg.includes("optim")) type = "performance";
-    else if (msg.includes("security") || msg.includes("vuln")) type = "security";
-
-    const complexity = Math.min(10, Math.max(1, Math.log2(commit.filesChanged + 1) * 3));
-    const businessValue = type === "feature" ? 7 : type === "bugfix" ? 6 : 4;
-    const codeQuality = 5;
-
+  private toAnalyzedCommit(
+    commit: CommitData,
+    analysis: AICommitAnalysis | null,
+    modelUsed: string,
+  ): AnalyzedCommit {
     return {
-      impactScore: this.calculateImpactScore(businessValue, complexity, codeQuality, type),
-      businessValue,
-      complexity,
-      codeQuality,
-      classification: { type, confidence: 0.4, reasoning: "Classified by commit message keywords" },
-      summary: `${type} contribution with ${commit.filesChanged} files changed`,
-    };
-  }
-
-  private fallbackPRAnalysis(pr: PullRequestData): ImpactAnalysis {
-    const title = pr.title.toLowerCase();
-    let type: ContributionType = "chore";
-
-    if (title.includes("feat") || title.includes("add")) type = "feature";
-    else if (title.includes("fix") || title.includes("bug")) type = "bugfix";
-    else if (title.includes("refactor")) type = "refactor";
-    else if (title.includes("doc")) type = "documentation";
-    else if (title.includes("test")) type = "test";
-
-    const complexity = Math.min(10, Math.max(1, Math.log2(pr.changed_files + 1) * 3));
-    const businessValue = type === "feature" ? 7 : type === "bugfix" ? 6 : 4;
-    const mergedBonus = pr.merged ? 1.5 : 0.5;
-
-    return {
-      impactScore:
-        this.calculateImpactScore(businessValue, complexity, 5, type) * mergedBonus,
-      businessValue,
-      complexity,
-      codeQuality: 5,
-      classification: { type, confidence: 0.3, reasoning: "Classified by PR title keywords" },
-      summary: `${type} PR: ${pr.title}`,
+      sha: commit.sha,
+      message: commit.message,
+      author: commit.author,
+      date: commit.date,
+      repo: commit.repo,
+      repoLabel: commit.repoLabel,
+      repoType: commit.repoType,
+      filesChanged: commit.filesChanged,
+      isMergeCommit: commit.isMergeCommit,
+      analysis,
+      modelUsed,
     };
   }
 }

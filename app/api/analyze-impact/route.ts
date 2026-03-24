@@ -1,29 +1,70 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { GitHubService } from "@/lib/github-service";
 import { ScoringEngine } from "@/lib/scoring-engine";
+import { getOpenRouterApiKey } from "@/lib/openrouter-key";
+import {
+  endOfDayUtcIso,
+  startOfDayUtcIso,
+  validateAnalysisDateRange,
+} from "@/lib/date-range";
+import type { AnalyzeImpactPayload } from "@/lib/types";
 
-export async function POST(request: NextRequest) {
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
+export async function POST(request: Request) {
   try {
-    const { token, owner, repo, openaiKey } = await request.json();
+    const body = (await request.json()) as Partial<AnalyzeImpactPayload>;
+    const { token, repos, dateFrom, dateTo } = body;
 
-    if (!token || !owner || !repo) {
+    if (!token || !repos?.length) {
       return NextResponse.json(
-        { success: false, error: "token, owner, and repo are required" },
+        { error: "GitHub token and at least one repo required" },
         { status: 400 },
       );
     }
 
-    const aiKey = openaiKey || process.env.OPENAI_API_KEY || undefined;
+    if (!dateFrom || !dateTo || typeof dateFrom !== "string" || typeof dateTo !== "string") {
+      return NextResponse.json(
+        { error: "dateFrom and dateTo (YYYY-MM-DD) are required" },
+        { status: 400 },
+      );
+    }
 
-    const github = new GitHubService({ token, owner, repo });
-    const repoData = await github.fetchAllData();
-    const engine = new ScoringEngine(aiKey);
-    const result = await engine.analyzeRepository(repoData);
+    const rangeCheck = validateAnalysisDateRange(dateFrom, dateTo);
+    if (!rangeCheck.ok) {
+      return NextResponse.json({ error: rangeCheck.error }, { status: 400 });
+    }
 
-    return NextResponse.json({ success: true, data: result });
-  } catch (error) {
+    const since = startOfDayUtcIso(dateFrom);
+    const until = endOfDayUtcIso(dateTo);
+
+    console.log(`[API] analyze-impact: ${repos.length} repos, window ${dateFrom}…${dateTo}`);
+
+    const githubService = new GitHubService(token, { since, until });
+    const connection = await githubService.validateConnection();
+    if (!connection.valid) {
+      return NextResponse.json({ error: "Invalid GitHub token" }, { status: 401 });
+    }
+
+    const data = await githubService.fetchAllRepos(repos);
+
+    const fromBody = body.openrouterApiKey?.trim();
+    const openrouterKey = fromBody || getOpenRouterApiKey();
+    const engine = new ScoringEngine(openrouterKey);
+
+    console.log(`[API] OpenRouter key loaded: ${!!openrouterKey} (len=${openrouterKey?.length ?? 0})`);
+    const result = await engine.analyzeMultiRepo(data);
+
+    return NextResponse.json({
+      success: true,
+      ...result,
+      analysisWindow: { from: dateFrom, to: dateTo },
+    });
+  } catch (err) {
+    console.error("[API] analyze-impact error:", err);
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Analysis failed" },
+      { error: "Analysis failed", details: String(err) },
       { status: 500 },
     );
   }

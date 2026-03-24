@@ -7,19 +7,12 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  LineChart,
-  Line,
   PieChart,
   Pie,
   Cell,
-  RadarChart,
-  Radar,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
 } from "recharts";
 import { BarChart3 } from "lucide-react";
-import type { DeveloperProfile, AnalysisResult } from "@/lib/types";
+import type { AnalysisResult } from "@/lib/types";
 
 interface ContributionChartsProps {
   result: AnalysisResult;
@@ -27,26 +20,39 @@ interface ContributionChartsProps {
 }
 
 const COLORS = [
-  "#818cf8",
+  "#054f99",
+  "#0a6dbd",
+  "#3d8fd4",
   "#34d399",
-  "#f59e0b",
+  "#fbbf24",
   "#f87171",
-  "#a78bfa",
-  "#2dd4bf",
-  "#fb923c",
-  "#e879f9",
+  "#7eb8e8",
+  "#c084fc",
 ];
 
 const typeColors: Record<string, string> = {
-  feature: "#818cf8",
-  bugfix: "#f87171",
+  feature: "#054f99",
+  bug_fix: "#f87171",
   refactor: "#34d399",
-  documentation: "#f59e0b",
   test: "#a78bfa",
   chore: "#64748b",
-  performance: "#2dd4bf",
-  security: "#fb923c",
 };
+
+const repoTypeColors: Record<string, string> = {
+  frontend: "#0a6dbd",
+  backend: "#fbbf24",
+  erp: "#c084fc",
+};
+
+/** Recharts default tooltip band uses fill #ccc — override for dark UI */
+const CHART_TOOLTIP_CURSOR = {
+  fill: "rgba(5, 79, 153, 0.09)",
+  stroke: "rgba(5, 79, 153, 0.28)",
+  strokeWidth: 1,
+} as const;
+
+const axisTick = { fill: "#8b949e", fontSize: 11 };
+const axisLine = { stroke: "#30363d" };
 
 const CustomTooltip = ({
   active,
@@ -59,8 +65,8 @@ const CustomTooltip = ({
 }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 shadow-xl">
-      <p className="text-xs text-zinc-400 mb-1">{label}</p>
+    <div className="rounded-lg border border-[var(--cursor-border)] bg-[var(--cursor-elevated)] px-3 py-2 shadow-xl shadow-black/40">
+      <p className="text-xs text-[#8b949e] mb-1">{label}</p>
       {payload.map((item, i) => (
         <p key={i} className="text-sm font-medium" style={{ color: item.color }}>
           {item.name}: {typeof item.value === "number" ? item.value.toFixed(1) : item.value}
@@ -72,22 +78,19 @@ const CustomTooltip = ({
 
 export default function ContributionCharts({
   result,
-  selectedDeveloper,
+  selectedDeveloper: _selectedDeveloper,
 }: ContributionChartsProps) {
-  const devs = result.developers;
+  const devs = result.developers.filter((d) => d.role === "developer");
 
-  const impactBarData = devs
-    .slice(0, 10)
-    .map((d) => ({
-      name: d.login,
-      score: Math.round(d.totalImpactScore),
-      commits: d.totalCommits,
-      prs: d.totalPRs,
-    }));
+  const impactBarData = devs.slice(0, 10).map((d) => ({
+    name: d.login,
+    score: d.impactScore,
+    avgImpact: d.avgBusinessImpact,
+  }));
 
   const allBreakdown: Record<string, number> = {};
   for (const dev of devs) {
-    for (const [type, count] of Object.entries(dev.contributionBreakdown)) {
+    for (const [type, count] of Object.entries(dev.breakdown)) {
       allBreakdown[type] = (allBreakdown[type] ?? 0) + count;
     }
   }
@@ -95,59 +98,65 @@ export default function ContributionCharts({
     .filter(([, v]) => v > 0)
     .map(([name, value]) => ({ name, value }));
 
-  const selected = selectedDeveloper
-    ? devs.find((d) => d.login === selectedDeveloper)
-    : devs[0];
-
-  const radarData = selected
-    ? [
-        { metric: "Business Value", value: selected.impactBreakdown.businessValue },
-        { metric: "Complexity", value: selected.impactBreakdown.complexity },
-        { metric: "Code Quality", value: selected.impactBreakdown.codeQuality },
-        { metric: "Frequency", value: selected.impactBreakdown.frequency },
-        { metric: "PR Merge %", value: Math.round(selected.prAcceptanceRate / 10) },
-      ]
-    : [];
-
-  const weeklyData = selected?.weeklyScores ?? [];
+  const repoData: Record<string, number> = {};
+  for (const dev of result.developers) {
+    for (const [repo, data] of Object.entries(dev.repoBreakdown)) {
+      repoData[repo] = (repoData[repo] ?? 0) + data.commits;
+    }
+  }
+  const repoBarData = Object.entries(repoData).map(([name, commits]) => {
+    const repo = result.repos.find((r) => r.label === name);
+    return { name, commits, type: repo?.repoType ?? "backend" };
+  });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-rise">
       <div className="flex items-center gap-2 mb-2">
-        <BarChart3 className="w-5 h-5 text-indigo-400" />
+        <BarChart3 className="w-5 h-5 text-accent" />
         <h2 className="text-lg font-semibold text-white">Analytics</h2>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Impact Score Comparison */}
-        <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-          <h3 className="text-sm font-medium text-zinc-300 mb-4">Impact Score by Developer</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={impactBarData} barCategoryGap="20%">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 stagger-animate">
+        <div className="cursor-panel rounded-xl p-5 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
+          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Impact Score by Developer</h3>
+          <ResponsiveContainer width="100%" height={340}>
+            <BarChart
+              data={impactBarData}
+              barCategoryGap="18%"
+              margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+            >
               <XAxis
                 dataKey="name"
-                tick={{ fill: "#71717a", fontSize: 11 }}
-                axisLine={{ stroke: "#27272a" }}
+                interval={0}
+                tick={{
+                  ...axisTick,
+                  fontSize: 10,
+                  angle: -78,
+                  textAnchor: "end",
+                  dy: 4,
+                }}
+                height={92}
+                axisLine={axisLine}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fill: "#71717a", fontSize: 11 }}
-                axisLine={{ stroke: "#27272a" }}
+                tick={axisTick}
+                axisLine={axisLine}
                 tickLine={false}
+                width={36}
               />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="score" name="Impact Score" radius={[6, 6, 0, 0]}>
+              <Tooltip content={<CustomTooltip />} cursor={CHART_TOOLTIP_CURSOR} />
+              <Bar dataKey="score" name="Impact Score" radius={[6, 6, 0, 0]} activeBar={false}>
                 {impactBarData.map((_, idx) => (
-                  <Cell key={idx} fill={COLORS[idx % COLORS.length]} fillOpacity={0.85} />
+                  <Cell key={idx} fill={COLORS[idx % COLORS.length]} fillOpacity={0.88} />
                 ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Contribution Breakdown */}
-        <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-          <h3 className="text-sm font-medium text-zinc-300 mb-4">Contribution Types</h3>
+        <div className="cursor-panel rounded-xl p-5 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
+          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Contribution Types</h3>
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
               <Pie
@@ -167,12 +176,12 @@ export default function ContributionCharts({
                   />
                 ))}
               </Pie>
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip />} cursor={false} />
             </PieChart>
           </ResponsiveContainer>
           <div className="flex flex-wrap gap-3 justify-center mt-2">
             {pieData.map((entry) => (
-              <div key={entry.name} className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <div key={entry.name} className="flex items-center gap-1.5 text-xs text-[#8b949e]">
                 <div
                   className="w-2.5 h-2.5 rounded-full"
                   style={{ backgroundColor: typeColors[entry.name] ?? "#64748b" }}
@@ -183,83 +192,55 @@ export default function ContributionCharts({
           </div>
         </div>
 
-        {/* Radar - Developer Profile */}
-        {selected && (
-          <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-            <h3 className="text-sm font-medium text-zinc-300 mb-4">
-              Developer Profile: <span className="text-indigo-400">{selected.login}</span>
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="#27272a" />
-                <PolarAngleAxis
-                  dataKey="metric"
-                  tick={{ fill: "#71717a", fontSize: 11 }}
-                />
-                <PolarRadiusAxis
-                  angle={90}
-                  domain={[0, 10]}
-                  tick={{ fill: "#3f3f46", fontSize: 10 }}
-                />
-                <Radar
-                  name={selected.login}
-                  dataKey="value"
-                  stroke="#818cf8"
-                  fill="#818cf8"
-                  fillOpacity={0.25}
-                  strokeWidth={2}
-                />
-                <Tooltip content={<CustomTooltip />} />
-              </RadarChart>
-            </ResponsiveContainer>
+        <div className="cursor-panel rounded-xl p-5 lg:col-span-2 transition-[box-shadow,border-color] duration-300 hover:border-[var(--cursor-border)] hover:shadow-[0_0_0_1px_rgba(5,79,153,0.2)] animate-fade-rise">
+          <h3 className="text-sm font-medium text-[#8b949e] mb-4">Commits by Repository</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart
+              data={repoBarData}
+              barCategoryGap="28%"
+              margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+            >
+              <XAxis
+                dataKey="name"
+                interval={0}
+                tick={{
+                  ...axisTick,
+                  fontSize: 10,
+                  angle: -72,
+                  textAnchor: "end",
+                  dy: 4,
+                }}
+                height={88}
+                axisLine={axisLine}
+                tickLine={false}
+              />
+              <YAxis
+                tick={axisTick}
+                axisLine={axisLine}
+                tickLine={false}
+                width={36}
+              />
+              <Tooltip content={<CustomTooltip />} cursor={CHART_TOOLTIP_CURSOR} />
+              <Bar dataKey="commits" name="Commits" radius={[6, 6, 0, 0]} activeBar={false}>
+                {repoBarData.map((item) => (
+                  <Cell
+                    key={item.name}
+                    fill={repoTypeColors[item.type] ?? "#054f99"}
+                    fillOpacity={0.88}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex gap-4 justify-center mt-2">
+            {Object.entries(repoTypeColors).map(([type, color]) => (
+              <div key={type} className="flex items-center gap-1.5 text-xs text-[#8b949e]">
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+                {type}
+              </div>
+            ))}
           </div>
-        )}
-
-        {/* Weekly Trend */}
-        {weeklyData.length > 0 && (
-          <div className="bg-white/5 border border-white/10 rounded-xl p-5">
-            <h3 className="text-sm font-medium text-zinc-300 mb-4">
-              Weekly Activity: <span className="text-indigo-400">{selected?.login}</span>
-            </h3>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={weeklyData}>
-                <XAxis
-                  dataKey="week"
-                  tick={{ fill: "#71717a", fontSize: 10 }}
-                  axisLine={{ stroke: "#27272a" }}
-                  tickLine={false}
-                  tickFormatter={(v) => {
-                    const d = new Date(v);
-                    return `${d.getMonth() + 1}/${d.getDate()}`;
-                  }}
-                />
-                <YAxis
-                  tick={{ fill: "#71717a", fontSize: 11 }}
-                  axisLine={{ stroke: "#27272a" }}
-                  tickLine={false}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Line
-                  type="monotone"
-                  dataKey="score"
-                  name="Score"
-                  stroke="#818cf8"
-                  strokeWidth={2}
-                  dot={{ fill: "#818cf8", r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="commits"
-                  name="Commits"
-                  stroke="#34d399"
-                  strokeWidth={2}
-                  dot={{ fill: "#34d399", r: 3 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );

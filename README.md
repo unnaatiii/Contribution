@@ -1,3 +1,21 @@
+## DevImpact AI
+
+### Environment (one pattern)
+
+- **Committed template:** `.env.example` — safe to share, no secrets.
+- **Your secrets:** `.env.local` — create once: `cp .env.example .env.local`, then set `OPENROUTER_API_KEY=...` on **one line** (no broken `"` quotes).
+- Do **not** use a second `.env` file for the same keys; Next.js loads `.env.local` with higher priority and avoids confusion.
+
+### Run
+
+1. `npm run dev` → [http://localhost:3000](http://localhost:3000)
+2. Paste GitHub **PAT** (`repo` scope) → **Fetch my repositories**
+3. Select repos → **Run analysis**
+
+**APIs:** `POST /api/github/list-repos`, `POST /api/analyze-impact`
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
@@ -34,5 +52,3 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-
-bash "ngrok http 3000" to run the server.

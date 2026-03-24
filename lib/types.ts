@@ -1,14 +1,13 @@
-export interface GitHubConfig {
-  token: string;
+export interface RepoConfig {
   owner: string;
   repo: string;
+  label: string;
+  repoType: "frontend" | "backend" | "erp";
 }
 
-export interface Contributor {
-  login: string;
-  avatar_url: string;
-  contributions: number;
-  html_url: string;
+export interface GitHubConfig {
+  token: string;
+  repos: RepoConfig[];
 }
 
 export interface CommitData {
@@ -16,103 +15,86 @@ export interface CommitData {
   message: string;
   author: string;
   date: string;
-  filesChanged: number;
+  repo: string;
+  repoLabel: string;
+  repoType: "frontend" | "backend" | "erp";
+  filesChanged: string[];
   additions: number;
   deletions: number;
-  files: FileChange[];
-}
-
-export interface FileChange {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  patch?: string;
+  diff: string;
+  isMergeCommit: boolean;
 }
 
 export interface PullRequestData {
   number: number;
   title: string;
+  body: string;
   state: string;
   merged: boolean;
   author: string;
+  repo: string;
+  repoLabel: string;
   created_at: string;
   merged_at: string | null;
-  review_comments: number;
-  additions: number;
-  deletions: number;
-  changed_files: number;
-  labels: string[];
 }
 
-export interface IssueData {
-  number: number;
-  title: string;
-  state: string;
-  author: string;
-  labels: string[];
-  created_at: string;
-  closed_at: string | null;
+export interface ReviewData {
+  prNumber: number;
+  prTitle: string;
+  reviewer: string;
+  repo: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
 }
 
-export type ContributionType =
-  | "feature"
-  | "bugfix"
-  | "refactor"
-  | "documentation"
-  | "test"
-  | "chore"
-  | "performance"
-  | "security";
+export type ContributionType = "feature" | "bug_fix" | "refactor" | "test" | "chore";
+export type ImpactLevel = "low" | "medium" | "high" | "critical";
+export type ContributorRole = "developer" | "manager";
 
-export interface ContributionClassification {
+export interface AICommitAnalysis {
   type: ContributionType;
-  confidence: number;
+  impact_level: ImpactLevel;
+  business_impact_score: number;
+  /** Narrative summary of what changed and evidence */
   reasoning: string;
+  /** Dimensions explicitly weighed (e.g. "user submission path", "FE/BE contract") */
+  parameters_considered?: string[];
+  /** Why this exact score—not generic; tie number to parameters and evidence */
+  score_justification?: string;
+  /** Modules, routes, services, or user flows potentially affected */
+  affected_modules_and_flows?: string[];
 }
 
-export interface ImpactAnalysis {
-  impactScore: number;
-  businessValue: number;
-  complexity: number;
-  codeQuality: number;
-  classification: ContributionClassification;
-  summary: string;
+export interface AnalyzedCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  repo: string;
+  repoLabel: string;
+  repoType: "frontend" | "backend" | "erp";
+  filesChanged: string[];
+  isMergeCommit: boolean;
+  analysis: AICommitAnalysis | null;
+  modelUsed: string;
 }
 
 export interface DeveloperProfile {
   login: string;
   avatar_url: string;
-  html_url: string;
-  totalImpactScore: number;
+  role: ContributorRole;
   totalCommits: number;
-  totalPRs: number;
-  mergedPRs: number;
-  prAcceptanceRate: number;
-  totalIssues: number;
-  contributionBreakdown: Record<ContributionType, number>;
-  impactBreakdown: {
-    businessValue: number;
-    complexity: number;
-    codeQuality: number;
-    frequency: number;
-  };
-  weeklyScores: WeeklyScore[];
-  insights: DeveloperInsight[];
-  rank?: number;
+  meaningfulCommits: number;
+  mergeCommits: number;
+  reposContributed: string[];
+  impactScore: number;
+  avgBusinessImpact: number;
+  commits: AnalyzedCommit[];
+  breakdown: Record<ContributionType, number>;
+  repoBreakdown: Record<string, { commits: number; score: number }>;
+  totalReviews: number;
+  prsApproved: number;
+  insights: string[];
   tier: "exceptional" | "high" | "medium" | "growing";
-}
-
-export interface WeeklyScore {
-  week: string;
-  score: number;
-  commits: number;
-  prs: number;
-}
-
-export interface DeveloperInsight {
-  type: "strength" | "opportunity" | "highlight";
-  message: string;
 }
 
 export interface LeaderboardEntry {
@@ -121,23 +103,46 @@ export interface LeaderboardEntry {
   badge?: string;
 }
 
-export interface RepositoryData {
-  owner: string;
-  repo: string;
-  contributors: Contributor[];
+export interface MultiRepoData {
+  repos: RepoConfig[];
   commits: CommitData[];
   pullRequests: PullRequestData[];
-  issues: IssueData[];
+  reviews: ReviewData[];
   fetchedAt: string;
 }
 
+export interface AIAnalysisDiagnostics {
+  openrouterConfigured: boolean;
+  commitsEligible: number;
+  commitsWithAnalysis: number;
+  modelCallFailures: number;
+  recentErrors: string[];
+}
+
 export interface AnalysisResult {
-  repository: { owner: string; repo: string };
+  repos: RepoConfig[];
   developers: DeveloperProfile[];
   leaderboard: LeaderboardEntry[];
-  sprintTopContributor: LeaderboardEntry | null;
+  analyzedCommits: AnalyzedCommit[];
+  topContributor: LeaderboardEntry | null;
   teamInsights: TeamInsight[];
   analyzedAt: string;
+  aiPowered: boolean;
+  modelsUsed: string[];
+  commitCount: number;
+  repoCount: number;
+  aiDiagnostics?: AIAnalysisDiagnostics;
+  /** Inclusive YYYY-MM-DD range used when fetching from GitHub */
+  analysisWindow?: { from: string; to: string };
+}
+
+/** Client → analyze API: repos + optional OpenRouter override */
+export interface AnalyzeImpactPayload {
+  token: string;
+  repos: RepoConfig[];
+  dateFrom: string;
+  dateTo: string;
+  openrouterApiKey?: string;
 }
 
 export interface TeamInsight {
@@ -145,10 +150,4 @@ export interface TeamInsight {
   title: string;
   description: string;
   developers: string[];
-}
-
-export interface APIResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
