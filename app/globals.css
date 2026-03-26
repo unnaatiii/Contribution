@@ -1,15 +1,549 @@
 @import "tailwindcss";
 
+/* SaaS dark + glass — base #020617, purple/blue accents */
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
+  --background: #020617;
+  --foreground: #f8fafc;
+  --cursor-panel: rgba(255, 255, 255, 0.04);
+  --cursor-elevated: rgba(15, 23, 42, 0.85);
+  --accent: #a855f7;
+  --accent-hover: #9333ea;
+  --accent-muted: rgba(168, 85, 247, 0.25);
+  --cursor-border: rgba(168, 85, 247, 0.22);
+  --cursor-border-subtle: rgba(255, 255, 255, 0.1);
+  --cursor-accent: #a855f7;
+  --cursor-accent-dim: rgba(168, 85, 247, 0.35);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-accent: #a855f7;
+  --color-accent-hover: #9333ea;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/* Full-page gradient (Stripe / Linear–style depth) */
+.app-bg-saas {
+  min-height: 100vh;
+  background-color: #020617;
+  background-image:
+    radial-gradient(ellipse 120% 70% at 50% -25%, rgba(147, 51, 234, 0.22), transparent 55%),
+    radial-gradient(ellipse 85% 55% at 100% 10%, rgba(59, 130, 246, 0.14), transparent 52%),
+    radial-gradient(ellipse 65% 45% at 0% 100%, rgba(168, 85, 247, 0.1), transparent 48%);
+}
+
+/* Glass card — 20px radius, blur, soft shadow */
+.glass-surface {
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.22),
+    0 4px 6px -2px rgba(0, 0, 0, 0.12);
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-surface--lift:hover {
+  transform: scale(1.05);
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.45),
+    0 0 40px -12px rgba(147, 51, 234, 0.15);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Slight lift without full 1.05 (dense lists / leaderboard) */
+.glass-surface--lift-sm:hover {
+  transform: scale(1.02);
+  box-shadow:
+    0 20px 40px -12px rgba(0, 0, 0, 0.4),
+    0 0 32px -10px rgba(59, 130, 246, 0.12);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.btn-gradient-saas {
+  background: linear-gradient(to right, rgb(168 85 247), rgb(59 130 246));
+  color: white;
+  transition: opacity 300ms;
+}
+
+.btn-gradient-saas:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn-gradient-saas:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Connect flow — repo + date step: readable text over busy landing background */
+.connect-select-card {
+  border-radius: 20px;
+  background: rgba(7, 16, 48, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 24px 48px -16px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+}
+
+.connect-select-date-input {
+  color-scheme: dark;
+  background-color: rgb(15 23 42 / 0.92) !important;
+  color: rgb(244 244 245) !important;
+  border-color: rgb(113 113 122 / 0.45) !important;
+}
+
+.connect-select-date-input:focus {
+  border-color: rgb(167 139 250 / 0.55) !important;
+  outline: none;
+  box-shadow: 0 0 0 1px rgb(167 139 250 / 0.35);
+}
+
+.connect-select-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.88;
+  cursor: pointer;
+}
+
+.cursor-panel {
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2);
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes subtle-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+  }
+  50% {
+    box-shadow: 0 0 28px -6px rgba(147, 51, 234, 0.2);
+  }
+}
+
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+.animate-fade-rise {
+  animation: fade-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-subtle-glow {
+  animation: subtle-glow 4s ease-in-out infinite;
+}
+
+.shimmer-bar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+
+.shimmer-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+}
+
+.stagger-animate > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger-animate > *:nth-child(2) {
+  animation-delay: 70ms;
+}
+.stagger-animate > *:nth-child(3) {
+  animation-delay: 140ms;
+}
+.stagger-animate > *:nth-child(4) {
+  animation-delay: 210ms;
+}
+
+/* Landing (connect phase only): animated gradient + floating glow orbs */
+@keyframes landing-gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* Rich blue/cyan/royal stops so position-shift reads clearly */
+.landing-connect-bg {
+  pointer-events: none;
+  opacity: 0.84;
+  background: linear-gradient(
+    125deg,
+    #000000 0%,
+    #020617 10%,
+    #0f172a 22%,
+    #1e3a8a 36%,
+    #0c4a6e 48%,
+    #1d4ed8 58%,
+    #172554 68%,
+    #2563eb 78%,
+    #082f49 88%,
+    #000000 100%
+  );
+  background-size: 400% 400%;
+  animation: landing-gradient-shift 18s ease-in-out infinite;
+}
+
+/* Landing connect: pure CSS aurora (no images); fixed to match gradient viewport stack */
+.aurora-container {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora-parallax-wrap {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease-out;
+}
+
+.aurora {
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  top: -50%;
+  left: -50%;
+  filter: blur(80px);
+  opacity: 0.4;
+  mix-blend-mode: screen;
+  box-shadow: 0 0 120px rgba(34, 211, 238, 0.2);
+  animation: aurora-float 12s ease-in-out infinite;
+}
+
+.aurora-parallax-wrap:nth-child(1) .aurora {
+  animation-delay: 0s;
+}
+
+.aurora-parallax-wrap:nth-child(2) .aurora {
+  animation-delay: -4s;
+}
+
+.aurora-parallax-wrap:nth-child(3) .aurora {
+  animation-delay: -8s;
+}
+
+.aurora-1 {
+  background: radial-gradient(circle at 30% 40%, #22d3ee, rgba(2, 6, 23, 0) 60%);
+}
+
+.aurora-2 {
+  background: radial-gradient(circle at 70% 60%, #1e3a8a, rgba(2, 6, 23, 0) 60%);
+}
+
+.aurora-3 {
+  background: radial-gradient(circle at 50% 20%, #0ea5e9, rgba(2, 6, 23, 0) 60%);
+}
+
+@keyframes aurora-float {
+  0% {
+    transform: translateY(0) translateX(0);
+  }
+  50% {
+    transform: translateY(-40px) translateX(20px);
+  }
+  100% {
+    transform: translateY(0) translateX(0);
+  }
+}
+
+/* AI analysis phase only — scoped under .analyzing-phase-root */
+.analyzing-phase-root .analyzing-loader {
+  width: 90px;
+  height: 14px;
+  box-shadow: 0 3px 0 #fff;
+  position: relative;
+  clip-path: inset(-40px 0 -5px);
+}
+
+.analyzing-phase-root .analyzing-loader::before {
+  content: "";
+  position: absolute;
+  inset: auto calc(50% - 17px) 0;
+  height: 50px;
+  --g: no-repeat linear-gradient(#ccc 0 0);
+  background: var(--g), var(--g), var(--g), var(--g);
+  background-size: 16px 14px;
+  animation:
+    analyzing-l7-1 2s infinite linear,
+    analyzing-l7-2 2s infinite linear;
+}
+
+@keyframes analyzing-l7-1 {
+  0%,
+  100% {
+    background-position: 0 -50px, 100% -50px, 0 -50px, 100% -50px;
+  }
+  17.5% {
+    background-position: 0 100%, 100% -50px, 0 -50px, 100% -50px;
+  }
+  35% {
+    background-position: 0 100%, 100% 100%, 0 -50px, 100% -50px;
+  }
+  52.5% {
+    background-position: 0 100%, 100% 100%, 0 calc(100% - 16px), 100% -50px;
+  }
+  70%,
+  98% {
+    background-position: 0 100%, 100% 100%, 0 calc(100% - 16px), 100% calc(100% - 16px);
+  }
+}
+
+@keyframes analyzing-l7-2 {
+  0%,
+  70% {
+    transform: translate(0);
+  }
+  100% {
+    transform: translate(200%);
+  }
+}
+
+/* App-wide: horizontal aurora ribbons — royal blue #0b1e54 + navy #020617 only */
+.aurora-waves {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.aurora-wave-parallax-wrap {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease-out;
+}
+
+.wave {
+  position: absolute;
+  width: 200%;
+  height: 280px;
+  left: -50%;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.42;
+  mix-blend-mode: screen;
+  box-shadow: 0 0 120px rgba(11, 30, 84, 0.35);
+}
+
+.wave-1 {
+  top: 20%;
+  background: linear-gradient(
+    120deg,
+    rgba(2, 6, 23, 0),
+    rgba(11, 30, 84, 0.55),
+    rgba(2, 6, 23, 0.75),
+    rgba(2, 6, 23, 0)
+  );
+  animation: aurora-wave-drift-1 14s ease-in-out infinite;
+}
+
+.wave-2 {
+  top: 40%;
+  background: linear-gradient(
+    120deg,
+    rgba(2, 6, 23, 0),
+    rgba(11, 30, 84, 0.4),
+    rgba(2, 6, 23, 0.55),
+    rgba(2, 6, 23, 0)
+  );
+  animation: aurora-wave-drift-2 18s ease-in-out infinite reverse;
+}
+
+.wave-3 {
+  top: 60%;
+  background: linear-gradient(
+    120deg,
+    rgba(2, 6, 23, 0),
+    rgba(2, 6, 23, 0.65),
+    rgba(11, 30, 84, 0.45),
+    rgba(2, 6, 23, 0)
+  );
+  animation: aurora-wave-drift-3 22s ease-in-out infinite;
+}
+
+@keyframes aurora-wave-drift-1 {
+  0%,
+  100% {
+    transform: translateX(0) scaleY(1) rotate(-8deg);
+  }
+  50% {
+    transform: translateX(-5%) scaleY(1.2) rotate(-8deg);
+  }
+}
+
+@keyframes aurora-wave-drift-2 {
+  0%,
+  100% {
+    transform: translateX(0) scaleY(1) rotate(-6deg);
+  }
+  50% {
+    transform: translateX(-5%) scaleY(1.2) rotate(-6deg);
+  }
+}
+
+@keyframes aurora-wave-drift-3 {
+  0%,
+  100% {
+    transform: translateX(0) scaleY(1) rotate(-10deg);
+  }
+  50% {
+    transform: translateX(-5%) scaleY(1.2) rotate(-10deg);
+  }
+}
+
+/* App-wide: click star burst — dark yellow / amber */
+.cosmic-star-burst-particle {
+  position: fixed;
+  z-index: 50;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  margin-top: -3px;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: radial-gradient(circle, #ca8a04, #854d0e, transparent);
+  box-shadow:
+    0 0 10px rgba(202, 138, 4, 0.65),
+    0 0 20px rgba(133, 77, 14, 0.45);
+  animation: star-burst-fade-out 0.8s ease-out forwards;
+}
+
+@keyframes star-burst-fade-out {
+  from {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(var(--tx, 0px), var(--ty, 0px)) scale(0.5);
+  }
+}
+
+/* Dashboard “AI analysis” phase only — scoped so `.loader` does not leak app-wide */
+.analyzing-phase-root .loader {
+  width: 90px;
+  height: 14px;
+  box-shadow: 0 3px 0 #fff;
+  position: relative;
+  clip-path: inset(-40px 0 -5px);
+}
+
+.analyzing-phase-root .loader::before {
+  content: "";
+  position: absolute;
+  inset: auto calc(50% - 17px) 0;
+  height: 50px;
+  --g: no-repeat linear-gradient(#ccc 0 0);
+  background: var(--g), var(--g), var(--g), var(--g);
+  background-size: 16px 14px;
+  animation:
+    analyzing-l7-1 2s infinite linear,
+    analyzing-l7-2 2s infinite linear;
+}
+
+@keyframes analyzing-l7-1 {
+  0%,
+  100% {
+    background-position:
+      0 -50px,
+      100% -50px;
+  }
+  17.5% {
+    background-position:
+      0 100%,
+      100% -50px,
+      0 -50px,
+      100% -50px;
+  }
+  35% {
+    background-position:
+      0 100%,
+      100% 100%,
+      0 -50px,
+      100% -50px;
+  }
+  52.5% {
+    background-position:
+      0 100%,
+      100% 100%,
+      0 calc(100% - 16px),
+      100% -50px;
+  }
+  70%,
+  98% {
+    background-position:
+      0 100%,
+      100% 100%,
+      0 calc(100% - 16px),
+      100% calc(100% - 16px);
+  }
+}
+
+@keyframes analyzing-l7-2 {
+  0%,
+  70% {
+    transform: translate(0);
+  }
+  100% {
+    transform: translate(200%);
+  }
+}
+
+.summary-stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.summary-stagger > *:nth-child(2) {
+  animation-delay: 60ms;
+}
+.summary-stagger > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+.summary-stagger > *:nth-child(4) {
+  animation-delay: 180ms;
 }
 
 body {
@@ -20,7 +554,7 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #27272a transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -33,10 +567,95 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: rgba(148, 163, 184, 0.3);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+/* Dashboard nav — “magic line” hover indicator (sibling .magic-nav-line after links; Rock Starwind–style).
+   If you add/remove tabs, update slot math + nth-child rules to match `nav` in components/DashboardShell.tsx */
+.magic-nav-container {
+  --magic-gap: 0.5rem;
+  /* 5 tabs = 4 gaps (matches Tailwind gap-2) */
+  --magic-slot: calc((100% - 4 * var(--magic-gap)) / 5);
+}
+
+.magic-nav-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--magic-slot);
+  height: 2px;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: linear-gradient(90deg, #c084fc, #818cf8, #a855f7);
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.45);
+  opacity: 0;
+  transition:
+    left 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.28s ease;
+}
+
+@media (max-width: 639px) {
+  .magic-nav-line {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .magic-nav-line {
+    transition: none;
+  }
+}
+
+/* Current route: line visible under active tab */
+.magic-nav-container .magic-nav-link:nth-child(1)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: 0;
+}
+.magic-nav-container .magic-nav-link:nth-child(2)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(1 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(3)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(2 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(4)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(3 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(5)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(4 * (var(--magic-slot) + var(--magic-gap)));
+}
+
+/* Hover / keyboard focus: slides over active */
+.magic-nav-container .magic-nav-link:nth-child(1):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(1):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: 0;
+}
+.magic-nav-container .magic-nav-link:nth-child(2):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(2):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(1 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(3):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(3):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(2 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(4):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(4):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(3 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(5):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(5):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(4 * (var(--magic-slot) + var(--magic-gap)));
 }

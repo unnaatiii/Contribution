@@ -1,5 +1,5 @@
-import Dashboard from "./components/Dashboard";
+import ConnectLanding from "@/components/ConnectLanding";
 
 export default function Home() {
-  return <Dashboard />;
+  return <ConnectLanding />;
 }

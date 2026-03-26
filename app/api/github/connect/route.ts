@@ -1,47 +1,51 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { GitHubService } from "@/lib/github-service";
+import { getUserId, isAnalysisDbConfigured, saveReposFromConfigs } from "@/lib/db";
+import type { RepoConfig } from "@/lib/types";
 
-export async function POST(request: NextRequest) {
+export const runtime = "nodejs";
+
+export async function POST(request: Request) {
   try {
-    const { token, owner, repo } = await request.json();
+    const { token, repos } = (await request.json()) as {
+      token: string;
+      repos: RepoConfig[];
+    };
 
     if (!token) {
-      return NextResponse.json(
-        { success: false, error: "GitHub token is required" },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "GitHub token is required" }, { status: 400 });
     }
 
-    if (!owner || !repo) {
-      return NextResponse.json(
-        { success: false, error: "Repository owner and name are required" },
-        { status: 400 },
-      );
+    const githubService = new GitHubService(token, {
+      since: new Date(0).toISOString(),
+      until: new Date().toISOString(),
+    });
+    const connection = await githubService.validateConnection();
+
+    if (!connection.valid) {
+      return NextResponse.json({ error: "Invalid GitHub token" }, { status: 401 });
     }
 
-    const github = new GitHubService({ token, owner, repo });
-    const result = await github.validateConnection();
-
-    if (!result.valid) {
-      return NextResponse.json(
-        { success: false, error: "Invalid GitHub token" },
-        { status: 401 },
-      );
+    if (isAnalysisDbConfigured() && repos?.length) {
+      const uid = getUserId(token);
+      if (uid) {
+        try {
+          await saveReposFromConfigs(uid, repos);
+        } catch {
+          /* non-fatal */
+        }
+      }
     }
 
     return NextResponse.json({
       success: true,
       data: {
-        user: result.user,
-        owner,
-        repo,
-        message: `Connected as ${result.user} to ${owner}/${repo}`,
+        user: connection.user,
+        repos: repos?.length ?? 0,
+        message: `Connected as ${connection.user}. ${repos?.length ?? 0} repos configured.`,
       },
     });
-  } catch (error) {
-    return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : "Connection failed" },
-      { status: 500 },
-    );
+  } catch {
+    return NextResponse.json({ error: "Connection failed" }, { status: 500 });
   }
 }

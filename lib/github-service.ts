@@ -1,23 +1,61 @@
 import { Octokit } from "@octokit/rest";
 import type {
-  GitHubConfig,
-  Contributor,
+  RepoConfig,
   CommitData,
   PullRequestData,
-  IssueData,
-  FileChange,
-  RepositoryData,
+  ReviewData,
+  MultiRepoData,
 } from "./types";
+import { parseNoreplyGithubLogin } from "./commit-author";
+
+/** Skip unhelpful GitHub system accounts when using committer as fallback */
+const SKIP_COMMITTER_LOGINS = /^(web-flow|ghost)$/i;
+
+function resolveCommitAuthorLogin(commit: {
+  author: { login?: string } | null;
+  committer: { login?: string } | null;
+  commit: {
+    author?: { name?: string | null; email?: string | null } | null;
+    committer?: { name?: string | null; email?: string | null } | null;
+  };
+}): string {
+  if (commit.author?.login) return commit.author.login;
+  const cl = commit.committer?.login;
+  if (cl && !SKIP_COMMITTER_LOGINS.test(cl)) return cl;
+
+  const authorEmail = commit.commit.author?.email ?? undefined;
+  const committerEmail = commit.commit.committer?.email ?? undefined;
+  const fromAuthorEmail = parseNoreplyGithubLogin(authorEmail);
+  if (fromAuthorEmail) return fromAuthorEmail;
+  const fromCommitterEmail = parseNoreplyGithubLogin(committerEmail);
+  if (fromCommitterEmail) return fromCommitterEmail;
+
+  const name = commit.commit.author?.name?.trim() || "unknown";
+  return name;
+}
+
+export type GitHubFetchWindow = {
+  /** ISO 8601 — commits on/after this instant */
+  since: string;
+  /** ISO 8601 — commits on/before this instant */
+  until: string;
+};
+
+/** Per-repo commit fetch tuning (performance vs AI readiness) */
+export type GitHubRepoFetchOptions = {
+  /** Max commits from listCommits (newest first). Default 500 when omitted; API routes pass explicit limits. */
+  maxCommits?: number;
+  /** Skip per-commit getCommit — no diff/files; fast base layer */
+  skipDetails?: boolean;
+};
 
 export class GitHubService {
   private octokit: Octokit;
-  private owner: string;
-  private repo: string;
+  private readonly window: GitHubFetchWindow;
 
-  constructor(config: GitHubConfig) {
-    this.octokit = new Octokit({ auth: config.token });
-    this.owner = config.owner;
-    this.repo = config.repo;
+  constructor(token: string, window: GitHubFetchWindow) {
+    this.octokit = new Octokit({ auth: token });
+    this.window = window;
   }
 
   async validateConnection(): Promise<{ valid: boolean; user?: string }> {
@@ -29,201 +67,222 @@ export class GitHubService {
     }
   }
 
-  async fetchContributors(): Promise<Contributor[]> {
-    const contributors: Contributor[] = [];
-    let page = 1;
+  async fetchRepoCommits(
+    repo: RepoConfig,
+    options?: GitHubRepoFetchOptions,
+  ): Promise<CommitData[]> {
+    try {
+      const maxCommits = Math.min(10_000, Math.max(1, options?.maxCommits ?? 500));
+      const skipDetails = options?.skipDetails ?? false;
+      const perPage = 100;
+      const maxPages = Math.min(500, Math.ceil(maxCommits / perPage) + 2);
 
-    while (true) {
-      const { data } = await this.octokit.repos.listContributors({
-        owner: this.owner,
-        repo: this.repo,
-        per_page: 100,
-        page,
-      });
+      console.log(
+        `[GitHub] Fetching commits for ${repo.owner}/${repo.repo} (${this.window.since} … ${this.window.until}) limit=${maxCommits} skipDetails=${skipDetails}`,
+      );
 
-      if (data.length === 0) break;
-
-      for (const c of data) {
-        if (c.login) {
-          contributors.push({
-            login: c.login,
-            avatar_url: c.avatar_url ?? "",
-            contributions: c.contributions ?? 0,
-            html_url: c.html_url ?? "",
-          });
+      const collected: Awaited<ReturnType<Octokit["repos"]["listCommits"]>>["data"] = [];
+      let page = 1;
+      while (collected.length < maxCommits && page <= maxPages) {
+        const { data } = await this.octokit.repos.listCommits({
+          owner: repo.owner,
+          repo: repo.repo,
+          since: this.window.since,
+          until: this.window.until,
+          per_page: perPage,
+          page,
+        });
+        if (!data?.length) break;
+        for (const c of data) {
+          collected.push(c);
+          if (collected.length >= maxCommits) break;
         }
+        if (data.length < perPage) break;
+        page += 1;
       }
 
-      if (data.length < 100) break;
-      page++;
-    }
+      const slice = collected.slice(0, maxCommits);
+      console.log(
+        `[GitHub] ${repo.repo}: ${slice.length} commits (${page} listCommits page(s), cap ${maxCommits})`,
+      );
 
-    return contributors;
-  }
+      const commits: CommitData[] = [];
 
-  async fetchCommits(since?: string): Promise<CommitData[]> {
-    const commits: CommitData[] = [];
-    let page = 1;
-    const sinceDate = since ?? new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      for (const commit of slice) {
+        const isMerge =
+          commit.parents.length > 1 ||
+          /^Merge (pull request|branch)/.test(commit.commit.message);
 
-    while (page <= 5) {
-      const { data } = await this.octokit.repos.listCommits({
-        owner: this.owner,
-        repo: this.repo,
-        since: sinceDate,
-        per_page: 100,
-        page,
-      });
+        let diff = "";
+        let filesChanged: string[] = [];
+        let additions = 0;
+        let deletions = 0;
 
-      if (data.length === 0) break;
+        if (!isMerge && !skipDetails) {
+          try {
+            const { data: detail } = await this.octokit.repos.getCommit({
+              owner: repo.owner,
+              repo: repo.repo,
+              ref: commit.sha,
+            });
 
-      for (const commit of data) {
-        let detail;
-        try {
-          const { data: d } = await this.octokit.repos.getCommit({
-            owner: this.owner,
-            repo: this.repo,
-            ref: commit.sha,
-          });
-          detail = d;
-        } catch {
-          detail = null;
+            filesChanged = detail.files?.map((f) => f.filename ?? "") ?? [];
+            additions = detail.stats?.additions ?? 0;
+            deletions = detail.stats?.deletions ?? 0;
+
+            diff = (detail.files ?? [])
+              .slice(0, 8)
+              .map((f) => {
+                const patch = (f.patch ?? "").substring(0, 300);
+                return `--- ${f.filename} (${f.status}: +${f.additions}/-${f.deletions})\n${patch}`;
+              })
+              .join("\n\n");
+          } catch {
+            // rate limit or error — continue with basic data
+          }
         }
 
-        const files: FileChange[] =
-          detail?.files?.map((f) => ({
-            filename: f.filename ?? "",
-            status: f.status ?? "modified",
-            additions: f.additions ?? 0,
-            deletions: f.deletions ?? 0,
-            patch: f.patch?.substring(0, 500),
-          })) ?? [];
+        const authorEmail =
+          commit.commit.author?.email?.trim() || commit.commit.committer?.email?.trim() || undefined;
 
         commits.push({
           sha: commit.sha,
           message: commit.commit.message,
-          author: commit.author?.login ?? commit.commit.author?.name ?? "unknown",
+          author: resolveCommitAuthorLogin(commit),
+          authorEmail: authorEmail || undefined,
           date: commit.commit.author?.date ?? "",
-          filesChanged: detail?.files?.length ?? 0,
-          additions: detail?.stats?.additions ?? 0,
-          deletions: detail?.stats?.deletions ?? 0,
-          files,
+          repo: `${repo.owner}/${repo.repo}`,
+          repoLabel: repo.label,
+          repoType: repo.repoType,
+          filesChanged,
+          additions,
+          deletions,
+          diff,
+          isMergeCommit: isMerge,
         });
       }
 
-      if (data.length < 100) break;
-      page++;
+      return commits;
+    } catch (err) {
+      console.error(`[GitHub] Failed to fetch ${repo.owner}/${repo.repo}:`, err);
+      return [];
     }
-
-    return commits;
   }
 
-  async fetchPullRequests(state: "open" | "closed" | "all" = "all"): Promise<PullRequestData[]> {
-    const prs: PullRequestData[] = [];
-    let page = 1;
-
-    while (page <= 5) {
+  async fetchRepoPRs(repo: RepoConfig): Promise<PullRequestData[]> {
+    try {
       const { data } = await this.octokit.pulls.list({
-        owner: this.owner,
-        repo: this.repo,
-        state,
-        per_page: 100,
-        page,
+        owner: repo.owner,
+        repo: repo.repo,
+        state: "all",
+        per_page: 20,
         sort: "updated",
         direction: "desc",
       });
 
-      if (data.length === 0) break;
+      const sinceTs = new Date(this.window.since).getTime();
+      const untilTs = new Date(this.window.until).getTime();
 
-      for (const pr of data) {
-        let detail;
-        try {
-          const { data: d } = await this.octokit.pulls.get({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: pr.number,
-          });
-          detail = d;
-        } catch {
-          detail = null;
-        }
-
-        prs.push({
+      return data
+        .filter((pr) => {
+          const t = new Date(pr.created_at).getTime();
+          return t >= sinceTs && t <= untilTs;
+        })
+        .map((pr) => ({
           number: pr.number,
           title: pr.title,
+          body: (pr.body ?? "").substring(0, 300),
           state: pr.state,
-          merged: detail?.merged ?? false,
+          merged: pr.merged_at !== null,
           author: pr.user?.login ?? "unknown",
+          repo: `${repo.owner}/${repo.repo}`,
+          repoLabel: repo.label,
           created_at: pr.created_at,
-          merged_at: detail?.merged_at ?? null,
-          review_comments: detail?.review_comments ?? 0,
-          additions: detail?.additions ?? 0,
-          deletions: detail?.deletions ?? 0,
-          changed_files: detail?.changed_files ?? 0,
-          labels: pr.labels?.map((l) => (typeof l === "string" ? l : l.name ?? "")) ?? [],
-        });
-      }
-
-      if (data.length < 100) break;
-      page++;
+          merged_at: pr.merged_at ?? null,
+        }));
+    } catch {
+      return [];
     }
-
-    return prs;
   }
 
-  async fetchIssues(): Promise<IssueData[]> {
-    const issues: IssueData[] = [];
-    let page = 1;
+  async fetchRepoReviews(repo: RepoConfig, prNumbers: number[]): Promise<ReviewData[]> {
+    const reviews: ReviewData[] = [];
 
-    while (page <= 3) {
-      const { data } = await this.octokit.issues.listForRepo({
-        owner: this.owner,
-        repo: this.repo,
-        state: "all",
-        per_page: 100,
-        page,
-        sort: "updated",
-        direction: "desc",
-      });
+    const results = await Promise.all(
+      prNumbers.slice(0, 15).map(async (prNum) => {
+        try {
+          const { data } = await this.octokit.pulls.listReviews({
+            owner: repo.owner,
+            repo: repo.repo,
+            pull_number: prNum,
+            per_page: 50,
+          });
+          return data.map((r) => ({
+            prNumber: prNum,
+            prTitle: "",
+            reviewer: r.user?.login ?? "unknown",
+            repo: `${repo.owner}/${repo.repo}`,
+            state: r.state as ReviewData["state"],
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
 
-      if (data.length === 0) break;
-
-      for (const issue of data) {
-        if (issue.pull_request) continue;
-
-        issues.push({
-          number: issue.number,
-          title: issue.title,
-          state: issue.state as string,
-          author: issue.user?.login ?? "unknown",
-          labels: issue.labels?.map((l) => (typeof l === "string" ? l : l.name ?? "")) ?? [],
-          created_at: issue.created_at,
-          closed_at: issue.closed_at,
-        });
-      }
-
-      if (data.length < 100) break;
-      page++;
-    }
-
-    return issues;
+    reviews.push(...results.flat());
+    return reviews;
   }
 
-  async fetchAllData(): Promise<RepositoryData> {
-    const [contributors, commits, pullRequests, issues] = await Promise.all([
-      this.fetchContributors(),
-      this.fetchCommits(),
-      this.fetchPullRequests(),
-      this.fetchIssues(),
-    ]);
+  async fetchAllRepos(
+    repos: RepoConfig[],
+    commitOptions?: GitHubRepoFetchOptions,
+  ): Promise<MultiRepoData> {
+    console.log(`[GitHub] Fetching data from ${repos.length} repositories`);
+
+    const repoResults = await Promise.all(
+      repos.map(async (repo) => {
+        const [commits, prs] = await Promise.all([
+          this.fetchRepoCommits(repo, commitOptions),
+          this.fetchRepoPRs(repo),
+        ]);
+        const prNumbers = prs.map((p) => p.number);
+        const reviews = await this.fetchRepoReviews(repo, prNumbers);
+        return { commits, prs, reviews };
+      }),
+    );
+
+    const allCommits: CommitData[] = [];
+    const allPRs: PullRequestData[] = [];
+    const allReviews: ReviewData[] = [];
+
+    for (const r of repoResults) {
+      allCommits.push(...r.commits);
+      allPRs.push(...r.prs);
+      allReviews.push(...r.reviews);
+    }
+
+    // filter out bots
+    const sinceTs = new Date(this.window.since).getTime();
+    const untilTs = new Date(this.window.until).getTime();
+
+    const botPatterns = /\[bot\]|dependabot|renovate|github-actions|codecov/i;
+    const filteredCommits = allCommits.filter((c) => {
+      if (botPatterns.test(c.author)) return false;
+      const t = new Date(c.date).getTime();
+      if (Number.isNaN(t)) return false;
+      return t >= sinceTs && t <= untilTs;
+    });
+    const filteredPRs = allPRs.filter((p) => !botPatterns.test(p.author));
+    const filteredReviews = allReviews.filter((r) => !botPatterns.test(r.reviewer));
+
+    console.log(`[GitHub] Total: ${filteredCommits.length} commits, ${filteredPRs.length} PRs, ${filteredReviews.length} reviews across ${repos.length} repos`);
 
     return {
-      owner: this.owner,
-      repo: this.repo,
-      contributors,
-      commits,
-      pullRequests,
-      issues,
+      repos,
+      commits: filteredCommits,
+      pullRequests: filteredPRs,
+      reviews: filteredReviews,
       fetchedAt: new Date().toISOString(),
     };
   }
