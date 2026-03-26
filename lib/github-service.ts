@@ -41,6 +41,14 @@ export type GitHubFetchWindow = {
   until: string;
 };
 
+/** Per-repo commit fetch tuning (performance vs AI readiness) */
+export type GitHubRepoFetchOptions = {
+  /** Max commits from listCommits (newest first). Default 500 when omitted; API routes pass explicit limits. */
+  maxCommits?: number;
+  /** Skip per-commit getCommit — no diff/files; fast base layer */
+  skipDetails?: boolean;
+};
+
 export class GitHubService {
   private octokit: Octokit;
   private readonly window: GitHubFetchWindow;
@@ -59,25 +67,48 @@ export class GitHubService {
     }
   }
 
-  async fetchRepoCommits(repo: RepoConfig): Promise<CommitData[]> {
+  async fetchRepoCommits(
+    repo: RepoConfig,
+    options?: GitHubRepoFetchOptions,
+  ): Promise<CommitData[]> {
     try {
+      const maxCommits = Math.min(10_000, Math.max(1, options?.maxCommits ?? 500));
+      const skipDetails = options?.skipDetails ?? false;
+      const perPage = 100;
+      const maxPages = Math.min(500, Math.ceil(maxCommits / perPage) + 2);
+
       console.log(
-        `[GitHub] Fetching commits for ${repo.owner}/${repo.repo} (${this.window.since} … ${this.window.until})`,
+        `[GitHub] Fetching commits for ${repo.owner}/${repo.repo} (${this.window.since} … ${this.window.until}) limit=${maxCommits} skipDetails=${skipDetails}`,
       );
 
-      const { data } = await this.octokit.repos.listCommits({
-        owner: repo.owner,
-        repo: repo.repo,
-        since: this.window.since,
-        until: this.window.until,
-        per_page: 100,
-      });
+      const collected: Awaited<ReturnType<Octokit["repos"]["listCommits"]>>["data"] = [];
+      let page = 1;
+      while (collected.length < maxCommits && page <= maxPages) {
+        const { data } = await this.octokit.repos.listCommits({
+          owner: repo.owner,
+          repo: repo.repo,
+          since: this.window.since,
+          until: this.window.until,
+          per_page: perPage,
+          page,
+        });
+        if (!data?.length) break;
+        for (const c of data) {
+          collected.push(c);
+          if (collected.length >= maxCommits) break;
+        }
+        if (data.length < perPage) break;
+        page += 1;
+      }
 
-      console.log(`[GitHub] Got ${data.length} commits from ${repo.repo}`);
+      const slice = collected.slice(0, maxCommits);
+      console.log(
+        `[GitHub] ${repo.repo}: ${slice.length} commits (${page} listCommits page(s), cap ${maxCommits})`,
+      );
 
       const commits: CommitData[] = [];
 
-      for (const commit of data) {
+      for (const commit of slice) {
         const isMerge =
           commit.parents.length > 1 ||
           /^Merge (pull request|branch)/.test(commit.commit.message);
@@ -87,7 +118,7 @@ export class GitHubService {
         let additions = 0;
         let deletions = 0;
 
-        if (!isMerge) {
+        if (!isMerge && !skipDetails) {
           try {
             const { data: detail } = await this.octokit.repos.getCommit({
               owner: repo.owner,
@@ -203,13 +234,16 @@ export class GitHubService {
     return reviews;
   }
 
-  async fetchAllRepos(repos: RepoConfig[]): Promise<MultiRepoData> {
+  async fetchAllRepos(
+    repos: RepoConfig[],
+    commitOptions?: GitHubRepoFetchOptions,
+  ): Promise<MultiRepoData> {
     console.log(`[GitHub] Fetching data from ${repos.length} repositories`);
 
     const repoResults = await Promise.all(
       repos.map(async (repo) => {
         const [commits, prs] = await Promise.all([
-          this.fetchRepoCommits(repo),
+          this.fetchRepoCommits(repo, commitOptions),
           this.fetchRepoPRs(repo),
         ]);
         const prNumbers = prs.map((p) => p.number);

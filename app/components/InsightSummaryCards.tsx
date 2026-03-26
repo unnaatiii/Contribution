@@ -4,11 +4,14 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { Crown, Eye, AlertTriangle, Flame } from "lucide-react";
 import type { AnalysisResult, DeveloperProfile, LeaderboardEntry } from "@/lib/types";
+import { contributorDisplayLabel } from "@/lib/commit-author";
 import { formatIsoWeekLabel } from "@/lib/format-iso-week";
 import { recordDeveloperProfileTransition } from "@/animations/profileTransition";
 
 interface InsightSummaryCardsProps {
   result: AnalysisResult;
+  /** Extra lines under the Insights title (repos + dates for the active view). */
+  headingDetail?: ReactNode;
 }
 
 function devsOnly(developers: DeveloperProfile[]) {
@@ -100,7 +103,7 @@ const cardStyles = {
   },
 } as const;
 
-export default function InsightSummaryCards({ result }: InsightSummaryCardsProps) {
+export default function InsightSummaryCards({ result, headingDetail }: InsightSummaryCardsProps) {
   const { mostImpactful, hiddenPerformer, highEffortLowImpact, sprintLeader, weekLabel } =
     pickSummaries(result.developers, result.leaderboard, result.analyzedAt);
 
@@ -150,22 +153,25 @@ export default function InsightSummaryCards({ result }: InsightSummaryCardsProps
     },
     {
       key: "sprint",
-      label: "Sprint Leader",
+      label: "Top Activity",
       icon: <Flame className="w-4 h-4" />,
       style: cardStyles.rose,
       dev: sprintLeader,
       primary: sprintLeader ? String(sprintLeader.impactScore) : "—",
       sub: sprintLeader
         ? `${weekLabel} · ${sprintLeader.meaningfulCommits} commits in this analysis window.`
-        : "No sprint-style activity to highlight.",
+        : "No extra high-activity contributor to highlight.",
     },
   ];
 
   return (
     <section className="mb-8">
-      <div className="flex items-center gap-3 mb-6">
-        <span className="h-2 w-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 shadow-lg shadow-purple-500/50" />
-        <h2 className="text-2xl font-semibold text-white tracking-tight">Insights</h2>
+      <div className="mb-6 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="h-2 w-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 shadow-lg shadow-purple-500/50" />
+          <h2 className="text-2xl font-semibold text-white tracking-tight">Insights</h2>
+        </div>
+        {headingDetail}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-6 summary-stagger">
         {cards.map((c) => {
@@ -181,8 +187,11 @@ export default function InsightSummaryCards({ result }: InsightSummaryCardsProps
                 {c.label}
               </p>
               {c.dev ? (
-                <p className="text-white font-semibold truncate" title={c.dev.login}>
-                  {c.dev.login}
+                <p
+                  className="text-white font-semibold truncate"
+                  title={contributorDisplayLabel(c.dev.login)}
+                >
+                  {contributorDisplayLabel(c.dev.login)}
                 </p>
               ) : (
                 <p className="text-zinc-500 text-sm">—</p>

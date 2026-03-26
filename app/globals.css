@@ -574,3 +574,88 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.45);
 }
+
+/* Dashboard nav — “magic line” hover indicator (sibling .magic-nav-line after links; Rock Starwind–style).
+   If you add/remove tabs, update slot math + nth-child rules to match `nav` in components/DashboardShell.tsx */
+.magic-nav-container {
+  --magic-gap: 0.5rem;
+  /* 5 tabs = 4 gaps (matches Tailwind gap-2) */
+  --magic-slot: calc((100% - 4 * var(--magic-gap)) / 5);
+}
+
+.magic-nav-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--magic-slot);
+  height: 2px;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: linear-gradient(90deg, #c084fc, #818cf8, #a855f7);
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.45);
+  opacity: 0;
+  transition:
+    left 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.28s ease;
+}
+
+@media (max-width: 639px) {
+  .magic-nav-line {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .magic-nav-line {
+    transition: none;
+  }
+}
+
+/* Current route: line visible under active tab */
+.magic-nav-container .magic-nav-link:nth-child(1)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: 0;
+}
+.magic-nav-container .magic-nav-link:nth-child(2)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(1 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(3)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(2 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(4)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(3 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(5)[data-active="true"] ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(4 * (var(--magic-slot) + var(--magic-gap)));
+}
+
+/* Hover / keyboard focus: slides over active */
+.magic-nav-container .magic-nav-link:nth-child(1):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(1):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: 0;
+}
+.magic-nav-container .magic-nav-link:nth-child(2):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(2):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(1 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(3):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(3):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(2 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(4):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(4):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(3 * (var(--magic-slot) + var(--magic-gap)));
+}
+.magic-nav-container .magic-nav-link:nth-child(5):hover ~ .magic-nav-line,
+.magic-nav-container .magic-nav-link:nth-child(5):focus-visible ~ .magic-nav-line {
+  opacity: 1;
+  left: calc(4 * (var(--magic-slot) + var(--magic-gap)));
+}

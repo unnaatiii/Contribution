@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Trophy, TrendingUp, Award, Shield } from "lucide-react";
 import type { LeaderboardEntry } from "@/lib/types";
+import { contributorDisplayLabel } from "@/lib/commit-author";
 import { recordDeveloperProfileTransition } from "@/animations/profileTransition";
 
 interface LeaderboardProps {
@@ -48,9 +49,13 @@ export default function Leaderboard({ entries }: LeaderboardProps) {
         </div>
         <h2 className="text-2xl font-semibold text-white tracking-tight">Impact Leaderboard</h2>
         <span className="text-[10px] px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-400 ml-auto">
-          Developers only
+          By impact, not commit count
         </span>
       </div>
+      <p className="text-[11px] text-zinc-500 -mt-2 mb-2 leading-snug">
+        Order follows total impact score (type × impact × repo weight + business score). More commits does
+        not automatically mean a higher rank.
+      </p>
 
       {entries.map((entry) => {
         const dev = entry.developer;
@@ -76,13 +81,15 @@ export default function Leaderboard({ entries }: LeaderboardProps) {
 
               <img
                 src={dev.avatar_url}
-                alt={dev.login}
+                alt={contributorDisplayLabel(dev.login)}
                 className="w-10 h-10 rounded-2xl ring-2 ring-white/10 shrink-0 object-cover shadow-lg"
               />
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-white font-medium truncate">{dev.login}</span>
+                  <span className="text-white font-medium truncate">
+                    {contributorDisplayLabel(dev.login)}
+                  </span>
                   <span
                     className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase tracking-wider ${
                       dev.tier === "exceptional"

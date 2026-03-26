@@ -15,9 +15,9 @@ export default function ConnectLanding() {
     result,
     error,
     progress,
-    runAnalysis,
+    loadBaseData,
     clearSessionAndGoConnect,
-    handleRefresh,
+    retryLastOperation,
     config,
   } = useAnalysisSession();
   const auroraContainerRef = useRef<HTMLDivElement>(null);
@@ -25,7 +25,14 @@ export default function ConnectLanding() {
   useEffect(() => {
     if (!bootstrapped) return;
     if (result && phase === "done") {
-      router.replace("/insights");
+      router.replace("/repo");
+    }
+  }, [bootstrapped, result, phase, router]);
+
+  useEffect(() => {
+    if (!bootstrapped) return;
+    if (result && phase === "analyzing_ai") {
+      router.replace("/analysis");
     }
   }, [bootstrapped, result, phase, router]);
 
@@ -63,27 +70,24 @@ export default function ConnectLanding() {
     );
   }
 
-  if (phase === "analyzing") {
+  if (phase === "loading_data") {
     return (
       <div className="analyzing-phase-root min-h-screen flex items-center justify-center p-6">
         <div className="glass-surface max-w-md w-full p-8 text-center animate-fade-rise">
-          <div className="analyzing-loader mx-auto mb-6" aria-hidden />
-          <h2 className="text-2xl font-semibold text-white mb-2">AI Analysis in Progress</h2>
+          <Loader2 className="w-10 h-10 text-purple-400 animate-spin mx-auto mb-6" />
+          <h2 className="text-2xl font-semibold text-white mb-2">Loading from GitHub</h2>
           <p className="text-sm text-gray-400 leading-relaxed">{progress}</p>
           <div className="mt-6 h-1.5 rounded-full bg-white/5 overflow-hidden shimmer-bar mx-auto max-w-xs" />
-          <div className="mt-6 flex items-center justify-center gap-2">
-            <div className="flex gap-1">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 animate-pulse"
-                  style={{ animationDelay: `${i * 200}ms` }}
-                />
-              ))}
-            </div>
-            <span className="text-xs text-gray-500">Fetching diffs & analyzing with AI...</span>
-          </div>
         </div>
+      </div>
+    );
+  }
+
+  if (phase === "analyzing_ai" && result) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-950">
+        <Loader2 className="w-10 h-10 text-purple-400 animate-spin mb-4" />
+        <p className="text-sm text-zinc-400 text-center">Opening analysis…</p>
       </div>
     );
   }
@@ -106,7 +110,7 @@ export default function ConnectLanding() {
             {config && (
               <button
                 type="button"
-                onClick={handleRefresh}
+                onClick={() => void retryLastOperation()}
                 className="px-5 py-2.5 rounded-[20px] btn-gradient-saas font-medium text-sm cursor-pointer shadow-lg shadow-purple-500/20"
               >
                 Retry
@@ -157,8 +161,8 @@ export default function ConnectLanding() {
               Measure Real Impact
             </h1>
             <p className="text-gray-300 text-base md:text-lg max-w-xl mx-auto leading-relaxed">
-              Connect with your GitHub PAT, pick which repos to analyze, then get AI impact scoring
-              across commits and teams.
+              Enter your GitHub PAT once — your dashboard opens with every repo, commits, and developers.
+              Run AI scoring when you want from the Analysis page.
             </p>
           </motion.div>
 
@@ -167,7 +171,7 @@ export default function ConnectLanding() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.55, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
           >
-            <ConnectForm onConnected={runAnalysis} />
+            <ConnectForm onConnected={loadBaseData} />
           </motion.div>
 
           <div className="mt-10 md:mt-12 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 max-w-2xl mx-auto">

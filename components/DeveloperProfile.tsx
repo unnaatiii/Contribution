@@ -21,6 +21,14 @@ import {
   GitMerge,
 } from "lucide-react";
 import type { AnalysisResult, DeveloperProfile, AnalyzedCommit } from "@/lib/types";
+import { SESSION_RESULT_KEY, SESSION_WIDE_BASE_KEY } from "@/lib/session-keys";
+import { useAnalysisSession } from "@/components/AnalysisSessionProvider";
+import {
+  canonicalizeContributorKey,
+  contributorAvatarUrl,
+  contributorDisplayLabel,
+  resolveProfileKey,
+} from "@/lib/commit-author";
 import { formatCommitDateTime } from "@/lib/format-commit-date";
 import { useDeveloperTheme } from "@/hooks/useDeveloperTheme";
 import {
@@ -55,20 +63,61 @@ const impactColors: Record<string, string> = {
   low: "text-zinc-400 bg-zinc-500/10",
 };
 
+function emptyShellDeveloper(login: string): DeveloperProfile {
+  return {
+    login,
+    avatar_url: contributorAvatarUrl(login),
+    role: "developer",
+    totalCommits: 0,
+    meaningfulCommits: 0,
+    mergeCommits: 0,
+    reposContributed: [],
+    impactScore: 0,
+    avgBusinessImpact: 0,
+    commits: [],
+    breakdown: { feature: 0, bug_fix: 0, refactor: 0, test: 0, chore: 0 },
+    repoBreakdown: {},
+    totalReviews: 0,
+    prsApproved: 0,
+    insights: [
+      "No commits for this login in the current analysis window. Run a wider date range or sync repos if you expected activity here.",
+    ],
+    tier: "growing",
+  };
+}
+
+function findDeveloperRow(r: AnalysisResult, slug: string): DeveloperProfile | undefined {
+  const s = slug.trim().toLowerCase();
+  const direct = r.developers.find((d) => d.login.toLowerCase() === s);
+  if (direct) return direct;
+  const canon = canonicalizeContributorKey(s);
+  return r.developers.find((d) => d.login.toLowerCase() === canon.toLowerCase());
+}
+
+function commitTimelineKey(c: AnalyzedCommit): string {
+  return `${c.repoLabel}:${c.sha}`;
+}
+
 function ProfileSection({
   children,
   className = "",
+  revealOnScroll = true,
 }: {
   children: React.ReactNode;
   className?: string;
+  /** When false, section is visible immediately (avoids timeline staying off-screen until scroll). */
+  revealOnScroll?: boolean;
 }) {
+  if (!revealOnScroll) {
+    return <section className={className}>{children}</section>;
+  }
   return (
     <motion.section
       className={className}
       variants={sectionReveal}
       initial="hidden"
       whileInView="visible"
-      viewport={{ once: true, margin: "-48px", amount: 0.2 }}
+      viewport={{ once: true, margin: "0px 0px -80px 0px", amount: 0.05 }}
     >
       {children}
     </motion.section>
@@ -102,10 +151,13 @@ function ProfileSkeleton({ theme }: { theme: { primary: string } }) {
 export default function DeveloperProfile({ devName }: { devName: string }) {
   const theme = useDeveloperTheme(devName);
   const router = useRouter();
+  const { dataResult, result, bootstrapped } = useAnalysisSession();
   const [developer, setDeveloper] = useState<DeveloperProfile | null>(null);
+  const [hasAiEnhancement, setHasAiEnhancement] = useState(false);
   const [commits, setCommits] = useState<AnalyzedCommit[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedSha, setExpandedSha] = useState<string | null>(null);
+  const [timelineFilter, setTimelineFilter] = useState<"all" | "analyzed">("all");
   const [gate, setGate] = useState<"pending" | "expand" | "ready">("pending");
   const [payload, setPayload] = useState<ProfileTransitionPayload | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -117,33 +169,80 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
   }, [devName]);
 
   useEffect(() => {
+    setTimelineFilter("all");
+    setExpandedSha(null);
+  }, [devName]);
+
+  useEffect(() => {
+    const applyResult = (r: AnalysisResult) => {
+      const dev = findDeveloperRow(r, devName);
+      const ai =
+        r.hasAiEnhancement ?? r.analyzedCommits.some((c) => c.analysis && !c.isMergeCommit);
+      startTransition(() => {
+        if (dev) {
+          setDeveloper(dev);
+          setHasAiEnhancement(!!ai);
+          const timeline =
+            dev.commits.length > 0
+              ? dev.commits
+              : r.analyzedCommits.filter(
+                  (c) =>
+                    resolveProfileKey(c.author, c.authorEmail).toLowerCase() === dev.login.toLowerCase(),
+                );
+          setCommits(timeline);
+        } else {
+          const fromCommits = r.analyzedCommits.filter(
+            (c) => resolveProfileKey(c.author, c.authorEmail).toLowerCase() === devName.toLowerCase(),
+          );
+          const shell = emptyShellDeveloper(devName);
+          if (fromCommits.length > 0) {
+            shell.commits = fromCommits;
+            shell.totalCommits = fromCommits.length;
+            shell.meaningfulCommits = fromCommits.filter((c) => !c.isMergeCommit).length;
+            shell.mergeCommits = fromCommits.filter((c) => c.isMergeCommit).length;
+            shell.insights = [];
+          }
+          setDeveloper(shell);
+          setHasAiEnhancement(!!ai);
+          setCommits(fromCommits);
+        }
+        setLoading(false);
+      });
+    };
+
+    const view = dataResult ?? result;
+    if (view) {
+      applyResult(view);
+      return;
+    }
+
+    if (!bootstrapped) return;
+
     const run = () => {
-      const stored = sessionStorage.getItem("devimpact-result");
+      const wideRaw = sessionStorage.getItem(SESSION_WIDE_BASE_KEY);
+      let stored: string | null = null;
+      if (wideRaw) {
+        try {
+          const o = JSON.parse(wideRaw) as { result?: AnalysisResult };
+          if (o?.result) stored = JSON.stringify(o.result);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!stored) stored = sessionStorage.getItem(SESSION_RESULT_KEY);
       if (!stored) {
-        startTransition(() => {
-          setLoading(false);
-        });
+        startTransition(() => setLoading(false));
         return;
       }
       try {
-        const result: AnalysisResult = JSON.parse(stored);
-        const dev = result.developers.find((d) => d.login.toLowerCase() === devName.toLowerCase());
-        startTransition(() => {
-          if (dev) {
-            setDeveloper(dev);
-            setCommits(
-              result.analyzedCommits.filter((c) => c.author.toLowerCase() === devName.toLowerCase()),
-            );
-          }
-          setLoading(false);
-        });
+        applyResult(JSON.parse(stored) as AnalysisResult);
       } catch {
         startTransition(() => setLoading(false));
       }
     };
     const id = requestAnimationFrame(() => run());
     return () => cancelAnimationFrame(id);
-  }, [devName]);
+  }, [devName, dataResult, result, bootstrapped]);
 
   const handleBack = useCallback(() => {
     setLeaving(true);
@@ -229,6 +328,11 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
   const timelineAll = [...commits].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
   );
+  const analyzedInTimeline = timelineAll.filter((c) => c.analysis);
+  const displayCommits =
+    timelineFilter === "analyzed"
+      ? [...analyzedInTimeline].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      : timelineAll;
   const repoEntries = Object.entries(developer.repoBreakdown).sort(([, a], [, b]) => b.score - a.score);
   const featureCommits = timelineAll.filter((c) => !c.isMergeCommit && c.analysis?.type === "feature");
 
@@ -289,13 +393,13 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
           <motion.img
             layoutId={`developer-avatar-${developer.login}`}
             src={developer.avatar_url}
-            alt={developer.login}
+            alt={contributorDisplayLabel(developer.login)}
             className="w-12 h-12 rounded-2xl ring-2 ring-white/10 object-cover shadow-lg"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-semibold text-white tracking-tight truncate">
-                {developer.login}
+                {contributorDisplayLabel(developer.login)}
               </h1>
               <span
                 className={`text-[10px] px-2 py-0.5 rounded font-medium ${
@@ -308,7 +412,13 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
               </span>
             </div>
             <p className="text-xs text-gray-400 mt-1 truncate">
-              {developer.reposContributed.join(", ")} · {timelineAll.length} commits in window
+              {developer.reposContributed.length > 0
+                ? `${developer.reposContributed.join(", ")} · `
+                : ""}
+              {timelineAll.length} commit{timelineAll.length === 1 ? "" : "s"} in window
+              {analyzedInTimeline.length > 0
+                ? ` · ${analyzedInTimeline.length} with AI analysis`
+                : ""}
             </p>
           </div>
           <div className="ml-auto text-right hidden sm:block">
@@ -320,7 +430,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                 backgroundClip: "text",
               }}
             >
-              {developer.impactScore}
+              {hasAiEnhancement ? developer.impactScore : "—"}
             </p>
             <p className="text-[10px] text-gray-500 uppercase tracking-wider">Impact</p>
           </div>
@@ -349,14 +459,18 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                 className="w-24 h-24 md:w-28 md:h-28 rounded-3xl ring-2 ring-white/15 object-cover shadow-xl"
               />
               <div className="flex-1">
-                <h2 className="text-3xl font-bold text-white tracking-tight">{developer.login}</h2>
+                <h2 className="text-3xl font-bold text-white tracking-tight">
+                  {contributorDisplayLabel(developer.login)}
+                </h2>
                 <p className="text-sm text-gray-400 mt-1 capitalize">{developer.role}</p>
                 <div
                   className="mt-4 inline-flex items-baseline gap-2 px-4 py-2 rounded-2xl border border-white/10 bg-black/20"
                   style={{ borderColor: `${theme.primary}44` }}
                 >
                   <span className="text-xs text-gray-500 uppercase tracking-wider">Impact score</span>
-                  <span className="text-3xl font-bold tabular-nums text-white">{developer.impactScore}</span>
+                  <span className="text-3xl font-bold tabular-nums text-white">
+                    {hasAiEnhancement ? developer.impactScore : "—"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -367,12 +481,12 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
               {[
                 {
                   label: "Impact Score",
-                  value: developer.impactScore,
+                  value: hasAiEnhancement ? developer.impactScore : "—",
                   icon: <Shield className="w-4 h-4" style={{ color: theme.primary }} />,
                 },
                 {
-                  label: "Commits",
-                  value: developer.meaningfulCommits,
+                  label: "Commits (window)",
+                  value: developer.totalCommits,
                   icon: <GitCommit className="w-4 h-4 text-blue-400" />,
                 },
                 {
@@ -387,7 +501,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                 },
                 {
                   label: "Avg Impact",
-                  value: `${developer.avgBusinessImpact}/100`,
+                  value: hasAiEnhancement ? `${developer.avgBusinessImpact}/100` : "—",
                   icon: <Brain className="w-4 h-4 text-emerald-400" />,
                 },
               ].map((stat) => (
@@ -404,6 +518,17 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
               ))}
             </div>
           </ProfileSection>
+
+          {hasAiEnhancement && (
+            <ProfileSection>
+              <p className="text-sm text-zinc-400 max-w-3xl leading-relaxed">
+                <span className="text-zinc-300 font-medium">Impact score</span> matches the Insights
+                leaderboard: each AI-scored commit contributes by type, impact level, repo weight, and
+                business score (not a simple average). Open any commit in the timeline below for the model’s{" "}
+                <em className="text-zinc-300">why this score</em> narrative and evidence.
+              </p>
+            </ProfileSection>
+          )}
 
           <ProfileSection className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="rounded-[20px] bg-white/5 backdrop-blur-xl border border-white/10 p-6">
@@ -475,7 +600,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                 <div className="space-y-2">
                   {featureCommits.map((c) => (
                     <div
-                      key={c.sha}
+                      key={commitTimelineKey(c)}
                       className="flex items-start gap-3 p-4 bg-white/[0.04] rounded-[14px] border border-white/5 hover:border-white/10 transition-colors"
                     >
                       <div className="flex-1 min-w-0">
@@ -511,14 +636,40 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
             </ProfileSection>
           )}
 
-          <ProfileSection>
+          <ProfileSection revealOnScroll={false}>
             <h3 className="text-2xl font-semibold text-white mb-2 flex items-center gap-2">
               <GitCommit className="w-6 h-6 text-blue-400" />
               Contribution timeline
             </h3>
-            <p className="text-sm text-gray-400 mb-6">
-              Newest first. Expand rows for full AI analysis and file lists.
+            <p className="text-sm text-gray-400 mb-4">
+              Newest first. Every commit in the current window is listed; AI narrative appears on analyzed
+              commits after you run analysis.
             </p>
+
+            <div className="flex flex-wrap gap-2 mb-6">
+              <button
+                type="button"
+                onClick={() => setTimelineFilter("all")}
+                className={`text-xs px-3 py-2 rounded-xl border transition-colors cursor-pointer ${
+                  timelineFilter === "all"
+                    ? "border-blue-400/50 bg-blue-500/15 text-blue-100"
+                    : "border-white/15 bg-white/5 text-zinc-400 hover:bg-white/10"
+                }`}
+              >
+                All commits ({timelineAll.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimelineFilter("analyzed")}
+                className={`text-xs px-3 py-2 rounded-xl border transition-colors cursor-pointer ${
+                  timelineFilter === "analyzed"
+                    ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                    : "border-white/15 bg-white/5 text-zinc-400 hover:bg-white/10"
+                }`}
+              >
+                Analyzed ({analyzedInTimeline.length})
+              </button>
+            </div>
 
             <div className="relative pl-2">
               <div
@@ -528,11 +679,19 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                 }}
               />
               <div className="space-y-4">
-                {timelineAll.map((commit) => {
-                  const expanded = expandedSha === commit.sha;
+                {displayCommits.length === 0 && (
+                  <p className="text-sm text-zinc-500 pl-8">
+                    {timelineFilter === "analyzed"
+                      ? "No analyzed commits in this window yet. Switch to “All commits” or run AI analysis."
+                      : "No commits in this window for this profile."}
+                  </p>
+                )}
+                {displayCommits.map((commit) => {
+                  const rowKey = commitTimelineKey(commit);
+                  const expanded = expandedSha === rowKey;
                   const hasAnalysis = !!commit.analysis;
                   return (
-                    <div key={commit.sha} className="relative pl-8">
+                    <div key={rowKey} className="relative pl-8">
                       <div
                         className={`absolute left-0 top-3 w-[22px] h-[22px] rounded-full border-2 flex items-center justify-center z-10 ${
                           commit.isMergeCommit
@@ -576,10 +735,10 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                             </p>
                             <p className="text-[10px] text-zinc-600 font-mono mt-1">{commit.sha}</p>
                           </div>
-                          {hasAnalysis && (
+                          {!commit.isMergeCommit && (
                             <button
                               type="button"
-                              onClick={() => setExpandedSha(expanded ? null : commit.sha)}
+                              onClick={() => setExpandedSha(expanded ? null : rowKey)}
                               className="shrink-0 flex items-center gap-1.5 text-xs px-3 py-2 rounded-xl border border-white/15 hover:bg-white/5 transition-colors cursor-pointer self-start"
                               style={{ color: theme.primary }}
                             >
@@ -591,7 +750,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                               ) : (
                                 <>
                                   <ChevronDown className="w-4 h-4" />
-                                  Full analysis
+                                  {hasAnalysis ? "Full analysis" : "Details"}
                                 </>
                               )}
                             </button>
@@ -621,7 +780,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                           </div>
                         )}
 
-                        {expanded && hasAnalysis && (
+                        {expanded && !commit.isMergeCommit && (
                           <div className="border-t border-white/10 bg-zinc-900/40 p-4 space-y-4">
                             <div>
                               <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
@@ -643,55 +802,64 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                                 </ul>
                               </div>
                             )}
-                            <div>
-                              <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                                Summary
-                              </p>
-                              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                                {commit.analysis!.reasoning}
-                              </p>
-                            </div>
-                            <div>
-                              <p
-                                className="text-[11px] uppercase tracking-wider mb-1"
-                                style={{ color: theme.primary }}
-                              >
-                                Why this score ({commit.analysis!.business_impact_score}/100)
-                              </p>
-                              <p
-                                className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 pl-3"
-                                style={{ borderColor: `${theme.primary}66` }}
-                              >
-                                {commit.analysis!.score_justification ?? commit.analysis!.reasoning}
-                              </p>
-                            </div>
-                            {(commit.analysis!.parameters_considered?.length ?? 0) > 0 && (
-                              <div>
-                                <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                                  Parameters considered
+                            {hasAnalysis ? (
+                              <>
+                                <div>
+                                  <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+                                    Summary
+                                  </p>
+                                  <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                                    {commit.analysis!.reasoning}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p
+                                    className="text-[11px] uppercase tracking-wider mb-1"
+                                    style={{ color: theme.primary }}
+                                  >
+                                    Why this score ({commit.analysis!.business_impact_score}/100)
+                                  </p>
+                                  <p
+                                    className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 pl-3"
+                                    style={{ borderColor: `${theme.primary}66` }}
+                                  >
+                                    {commit.analysis!.score_justification ?? commit.analysis!.reasoning}
+                                  </p>
+                                </div>
+                                {(commit.analysis!.parameters_considered?.length ?? 0) > 0 && (
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+                                      Parameters considered
+                                    </p>
+                                    <ul className="text-sm text-zinc-400 list-disc list-inside space-y-0.5">
+                                      {(commit.analysis!.parameters_considered ?? []).map((p, i) => (
+                                        <li key={i}>{p}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {(commit.analysis!.affected_modules_and_flows?.length ?? 0) > 0 && (
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+                                      Modules &amp; flows impacted
+                                    </p>
+                                    <ul className="text-sm text-amber-200/80 list-disc list-inside space-y-0.5">
+                                      {(commit.analysis!.affected_modules_and_flows ?? []).map((p, i) => (
+                                        <li key={i}>{p}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                <p className="text-[11px] text-zinc-600">
+                                  Model: {commit.modelUsed} · {formatCommitDateTime(commit.date)}
                                 </p>
-                                <ul className="text-sm text-zinc-400 list-disc list-inside space-y-0.5">
-                                  {(commit.analysis!.parameters_considered ?? []).map((p, i) => (
-                                    <li key={i}>{p}</li>
-                                  ))}
-                                </ul>
-                              </div>
+                              </>
+                            ) : (
+                              <p className="text-sm text-zinc-500">
+                                No AI layer for this commit yet. Use <strong className="text-zinc-400">Run AI analysis</strong>{" "}
+                                on the dashboard.
+                              </p>
                             )}
-                            {(commit.analysis!.affected_modules_and_flows?.length ?? 0) > 0 && (
-                              <div>
-                                <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                                  Modules &amp; flows impacted
-                                </p>
-                                <ul className="text-sm text-amber-200/80 list-disc list-inside space-y-0.5">
-                                  {(commit.analysis!.affected_modules_and_flows ?? []).map((p, i) => (
-                                    <li key={i}>{p}</li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                            <p className="text-[11px] text-zinc-600">
-                              Model: {commit.modelUsed} · {formatCommitDateTime(commit.date)}
-                            </p>
                           </div>
                         )}
 

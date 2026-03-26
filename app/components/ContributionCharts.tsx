@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   BarChart,
   Bar,
@@ -13,6 +14,7 @@ import {
 } from "recharts";
 import { BarChart3 } from "lucide-react";
 import type { AnalysisResult } from "@/lib/types";
+import { contributorDisplayLabel } from "@/lib/commit-author";
 
 interface ContributionChartsProps {
   result: AnalysisResult;
@@ -80,10 +82,18 @@ export default function ContributionCharts({
   result,
   selectedDeveloper: _selectedDeveloper,
 }: ContributionChartsProps) {
+  const router = useRouter();
+
+  const goToCommitsByType = (typeName: string) => {
+    const t = typeName.trim();
+    if (!t) return;
+    router.push(`/commits?type=${encodeURIComponent(t)}`);
+  };
+
   const devs = result.developers.filter((d) => d.role === "developer");
 
   const impactBarData = devs.slice(0, 10).map((d) => ({
-    name: d.login,
+    name: contributorDisplayLabel(d.login),
     score: d.impactScore,
     avgImpact: d.avgBusinessImpact,
   }));
@@ -158,7 +168,8 @@ export default function ContributionCharts({
         </div>
 
         <div className="glass-surface p-6 transition-all duration-300 hover:shadow-2xl hover:border-white/15 hover:shadow-blue-500/5 animate-fade-rise">
-          <h3 className="text-sm font-medium text-gray-400 mb-4">Contribution Types</h3>
+          <h3 className="text-sm font-medium text-gray-400 mb-1">Contribution Types</h3>
+          <p className="text-[10px] text-zinc-600 mb-4">Click a slice or legend to open Commits with that type.</p>
           <ResponsiveContainer width="100%" height={280}>
             <PieChart>
               <Pie
@@ -169,6 +180,11 @@ export default function ContributionCharts({
                 outerRadius={100}
                 paddingAngle={3}
                 dataKey="value"
+                style={{ cursor: "pointer" }}
+                onClick={(data) => {
+                  const name = (data as { name?: string })?.name;
+                  if (name) goToCommitsByType(name);
+                }}
               >
                 {pieData.map((entry) => (
                   <Cell
@@ -183,13 +199,18 @@ export default function ContributionCharts({
           </ResponsiveContainer>
           <div className="flex flex-wrap gap-3 justify-center mt-2">
             {pieData.map((entry) => (
-              <div key={entry.name} className="flex items-center gap-1.5 text-xs text-gray-400">
+              <button
+                key={entry.name}
+                type="button"
+                onClick={() => goToCommitsByType(entry.name)}
+                className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors cursor-pointer rounded-lg px-1.5 py-0.5 hover:bg-white/5"
+              >
                 <div
-                  className="w-2.5 h-2.5 rounded-full"
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: typeColors[entry.name] ?? "#64748b" }}
                 />
                 {entry.name} ({entry.value})
-              </div>
+              </button>
             ))}
           </div>
         </div>

@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { TeamInsight, LeaderboardEntry } from "@/lib/types";
+import { contributorDisplayLabel } from "@/lib/commit-author";
 import { recordDeveloperProfileTransition } from "@/animations/profileTransition";
 
 interface TeamInsightsProps {
@@ -75,11 +76,13 @@ export default function TeamInsights({ insights, topContributor }: TeamInsightsP
               <div className="flex items-center gap-3 mt-1">
                 <img
                   src={topContributor.developer.avatar_url}
-                  alt={topContributor.developer.login}
+                  alt={contributorDisplayLabel(topContributor.developer.login)}
                   className="w-8 h-8 rounded-full ring-2 ring-amber-500/30"
                 />
                 <div>
-                  <p className="text-white font-semibold">{topContributor.developer.login}</p>
+                  <p className="text-white font-semibold">
+                    {contributorDisplayLabel(topContributor.developer.login)}
+                  </p>
                   <p className="text-xs text-gray-400">
                     Impact: {topContributor.developer.impactScore} ·{" "}
                     {topContributor.developer.meaningfulCommits} commits ·{" "}

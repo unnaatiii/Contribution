@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { Octokit } from "@octokit/rest";
+import { explainDbWriteSkip, getUserId, isAnalysisDbConfigured, saveRepo } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
     const all: ListedRepo[] = [];
     let page = 1;
     const perPage = 100;
-    const maxPages = 5;
+    const maxPages = 15;
 
     while (page <= maxPages) {
       const { data } = await octokit.repos.listForAuthenticatedUser({
@@ -55,6 +56,30 @@ export async function POST(request: Request) {
 
       if (data.length < perPage) break;
       page += 1;
+    }
+
+    if (isAnalysisDbConfigured()) {
+      const uid = getUserId(token);
+      if (uid) {
+        console.log(`[list-repos] Saving ${all.length} repos to Supabase for tenant ${uid.slice(0, 12)}…`);
+        try {
+          for (const r of all) {
+            await saveRepo(uid, {
+              name: r.repo,
+              full_name: r.fullName,
+              private: r.private,
+            });
+          }
+        } catch (e) {
+          console.error("[list-repos] saveRepo loop failed:", e);
+        }
+      } else {
+        console.warn(
+          "[list-repos] getUserId returned null — ensure USER_ID_PEPPER is set in .env.local (required to hash PAT).",
+        );
+      }
+    } else {
+      console.warn("[list-repos] Supabase persistence disabled:", explainDbWriteSkip());
     }
 
     return NextResponse.json({

@@ -50,10 +50,64 @@ function displayNameToSlug(name: string): string | null {
 }
 
 /**
- * Single stable id for leaderboard grouping. Never uses generic host names (e.g. "MAC") as the key.
- * Order: noreply GitHub login → real-looking git author as login → email-derived handle → display-name slug.
+ * Map alternate GitHub / email-derived handles onto one profile (org-specific).
+ * Keys must be lowercase; values are the canonical login / display id used in the app.
  */
-export function resolveProfileKey(author: string, authorEmail?: string | null): string {
+const CONTRIBUTOR_CANONICAL_LOGIN: Record<string, string> = {
+  /** Misattributed commits — real owner */
+  rahulrameshm0: "raulk-09",
+  /** Email-hash style handles → real names (see contributorDisplayLabel) */
+  u0egoyg3: "joel",
+};
+
+/** Pretty names for canonical keys that are not GitHub usernames */
+const CONTRIBUTOR_DISPLAY_LABEL: Record<string, string> = {
+  joel: "JOEL",
+};
+
+/** Prefer ui-avatars with a real name — avoids wrong github.com/{login}.png */
+const USE_UI_AVATAR_FOR_CANONICAL = new Set(["joel"]);
+
+/**
+ * Merge alias handles into the canonical profile key (for leaderboard grouping).
+ */
+export function canonicalizeContributorKey(key: string): string {
+  if (!key || key === "unknown") return key;
+  const mapped = CONTRIBUTOR_CANONICAL_LOGIN[key.trim().toLowerCase()];
+  return mapped ?? key;
+}
+
+/**
+ * True if a commit-derived profile key matches any GitHub `repos/listContributors` login
+ * (handles canonical aliases, e.g. API returns u0egoyg3 but profile key is joel).
+ */
+export function profileKeyMatchesContributorLogin(
+  profileKey: string,
+  contributorLoginsLowercase: Set<string>,
+): boolean {
+  const pk = profileKey.trim().toLowerCase();
+  if (contributorLoginsLowercase.has(pk)) return true;
+  for (const gh of contributorLoginsLowercase) {
+    if (canonicalizeContributorKey(gh) === pk) return true;
+  }
+  return false;
+}
+
+/** Resolve a single GitHub login against commit-derived profile keys (aliases / canonicalization). */
+export function developerProfileForGraphLogin(
+  developers: { login: string }[],
+  graphLogin: string,
+): { login: string } | undefined {
+  const one = new Set([graphLogin.trim().toLowerCase()]);
+  return developers.find((d) => profileKeyMatchesContributorLogin(d.login, one));
+}
+
+/** Card / chart label; falls back to login */
+export function contributorDisplayLabel(login: string): string {
+  return CONTRIBUTOR_DISPLAY_LABEL[login.trim().toLowerCase()] ?? login;
+}
+
+function resolveProfileKeyRaw(author: string, authorEmail?: string | null): string {
   const a = (author || "").trim();
   const em = normalizeAuthorEmail(authorEmail);
 
@@ -72,6 +126,17 @@ export function resolveProfileKey(author: string, authorEmail?: string | null): 
   }
 
   return "unknown";
+}
+
+/**
+ * Single stable id for leaderboard grouping. Never uses generic host names (e.g. "MAC") as the key.
+ * Order: noreply GitHub login → real-looking git author as login → email-derived handle → display-name slug.
+ * Then applies {@link canonicalizeContributorKey} for org-specific merges.
+ */
+export function resolveProfileKey(author: string, authorEmail?: string | null): string {
+  const raw = resolveProfileKeyRaw(author, authorEmail);
+  if (raw === "unknown") return raw;
+  return canonicalizeContributorKey(raw);
 }
 
 /** True if this profile key should appear on the developer leaderboard (real or email-resolved person). */
@@ -99,6 +164,11 @@ function isEmailHashHandle(key: string): boolean {
 
 /** Avatar: GitHub CDN only when the key is a plausible GitHub username */
 export function contributorAvatarUrl(profileKey: string): string {
+  const lower = profileKey.trim().toLowerCase();
+  if (USE_UI_AVATAR_FOR_CANONICAL.has(lower)) {
+    const name = CONTRIBUTOR_DISPLAY_LABEL[lower] ?? profileKey;
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&size=128&background=6366f1&color=e5e7eb`;
+  }
   if (looksLikeGithubLogin(profileKey) && !isEmailHashHandle(profileKey)) {
     return `https://github.com/${profileKey}.png`;
   }

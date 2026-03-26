@@ -1,5 +1,6 @@
 import type {
   MultiRepoData,
+  CommitData,
   AnalyzedCommit,
   DeveloperProfile,
   LeaderboardEntry,
@@ -8,13 +9,22 @@ import type {
   ContributionType,
   ContributorRole,
   RepoConfig,
+  AnalysisCache,
 } from "./types";
 import { AIAnalyzer } from "./ai-analyzer";
+import {
+  bumpRepoLastAnalyzedAt,
+  cloneAnalysisCache,
+  getCachedFullAnalysis,
+  maxCommitDateForRepo,
+  upsertCommitAi,
+} from "./analysis-cache";
 import {
   contributorAvatarUrl,
   isResolvableContributorKey,
   resolveProfileKey,
 } from "./commit-author";
+import { analyzedCommitRowKey, dedupeAnalyzedCommitsByRepoSha } from "./dedupe-analyzed-commits";
 
 const TYPE_WEIGHTS: Record<ContributionType, number> = {
   feature: 10,
@@ -47,14 +57,101 @@ export class ScoringEngine {
   }
 
   async analyzeMultiRepo(data: MultiRepoData): Promise<AnalysisResult> {
-    console.log(`[Engine] Starting analysis of ${data.commits.length} commits across ${data.repos.length} repos`);
+    const { result } = await this.composeFromMultiRepo(data, {
+      analysisCache: null,
+      skipAi: false,
+    });
+    return result;
+  }
 
-    const analyzedCommits = await this.analyzer.analyzeAllCommits(data.commits);
+  /**
+   * GitHub base layer + optional AI: cache hits skip model calls; order matches `data.commits`.
+   */
+  async composeFromMultiRepo(
+    data: MultiRepoData,
+    options: {
+      analysisCache?: AnalysisCache | null;
+      skipAi?: boolean;
+      /** When set, AI layer reads/writes `ai_analysis` per commit (in addition to merged session/DB cache). */
+      analysisDbUserId?: string | null;
+    } = {},
+  ): Promise<{ result: AnalysisResult; analysisCache: AnalysisCache }> {
+    const skipAi = options.skipAi ?? false;
+    const cache = cloneAnalysisCache(options.analysisCache ?? null);
+    console.log(
+      `[Engine] compose ${data.commits.length} commits, skipAi=${skipAi}, cache repos=${Object.keys(cache.repos).length}`,
+    );
+
+    const pending: CommitData[] = [];
+    const byKey = new Map<string, AnalyzedCommit>();
+
+    for (const c of data.commits) {
+      const rowKey = analyzedCommitRowKey(c);
+      if (c.isMergeCommit) {
+        byKey.set(rowKey, this.analyzer.toAnalyzedCommit(c, null, "skipped"));
+        continue;
+      }
+      const hit = getCachedFullAnalysis(cache, c.repo, c.sha);
+      if (hit) {
+        byKey.set(rowKey, this.analyzer.toAnalyzedCommit(c, hit.analysis, hit.modelUsed));
+        continue;
+      }
+      if (skipAi || !this.analyzer.isAIPowered) {
+        byKey.set(rowKey, this.analyzer.toAnalyzedCommit(c, null, "none"));
+        continue;
+      }
+      pending.push(c);
+    }
+
+    if (pending.length > 0) {
+      const fresh = await this.analyzer.analyzeCommitsSubset(pending, options.analysisDbUserId);
+      for (const a of fresh) {
+        byKey.set(analyzedCommitRowKey(a), a);
+        if (a.analysis) {
+          upsertCommitAi(cache, a.repo, a.sha, a.analysis, a.modelUsed);
+        }
+      }
+    }
+
+    if (!skipAi && this.analyzer.isAIPowered) {
+      for (const r of data.repos) {
+        const rk = `${r.owner}/${r.repo}`;
+        const maxD = maxCommitDateForRepo(data.commits, rk);
+        if (maxD) bumpRepoLastAnalyzedAt(cache, rk, maxD);
+      }
+    }
+
+    const analyzedCommitsLinear = data.commits.map((c) => byKey.get(analyzedCommitRowKey(c))!);
+    const analyzedCommits = dedupeAnalyzedCommitsByRepoSha(analyzedCommitsLinear);
     const profiles = this.buildProfiles(analyzedCommits, data);
     const leaderboard = this.buildLeaderboard(profiles);
     const teamInsights = this.generateTeamInsights(profiles, data.repos);
 
-    return {
+    const eligibleKeys = new Set<string>();
+    for (const c of data.commits) {
+      if (c.isMergeCommit) continue;
+      eligibleKeys.add(analyzedCommitRowKey(c));
+    }
+    const eligible = eligibleKeys.size;
+    const withAnalysis = analyzedCommits.filter((c) => c.analysis && !c.isMergeCommit).length;
+    const hasAiEnhancement = withAnalysis > 0;
+
+    const aiDiagnostics =
+      pending.length > 0
+        ? {
+            ...this.analyzer.lastBatchDiagnostics,
+            commitsEligible: eligible,
+            commitsWithAnalysis: withAnalysis,
+          }
+        : {
+            openrouterConfigured: this.analyzer.isAIPowered,
+            commitsEligible: eligible,
+            commitsWithAnalysis: withAnalysis,
+            modelCallFailures: 0,
+            recentErrors: [] as string[],
+          };
+
+    const result: AnalysisResult = {
       repos: data.repos,
       developers: profiles,
       leaderboard,
@@ -63,14 +160,22 @@ export class ScoringEngine {
       teamInsights,
       analyzedAt: new Date().toISOString(),
       aiPowered: this.analyzer.isAIPowered,
-      modelsUsed: this.analyzer.modelNames,
+      modelsUsed: pending.length > 0 ? this.analyzer.modelNames : [],
       commitCount: analyzedCommits.length,
       repoCount: data.repos.length,
-      aiDiagnostics: this.analyzer.lastBatchDiagnostics,
+      aiDiagnostics,
+      dataLayer: hasAiEnhancement ? "enhanced" : "base",
+      hasAiEnhancement,
     };
+
+    return { result, analysisCache: cache };
   }
 
-  private buildProfiles(
+  /**
+   * Recompute leaderboard-style profiles from an analyzed commit list (+ reviews in `data`).
+   * Public for {@link ScoringEngine.rollupMergedWideScoped}.
+   */
+  public buildProfiles(
     analyzedCommits: AnalyzedCommit[],
     data: MultiRepoData,
   ): DeveloperProfile[] {
@@ -170,7 +275,7 @@ export class ScoringEngine {
     return Array.from(devMap.values()).sort((a, b) => b.impactScore - a.impactScore);
   }
 
-  private assignTier(dev: DeveloperProfile): DeveloperProfile["tier"] {
+  public assignTier(dev: DeveloperProfile): DeveloperProfile["tier"] {
     if (dev.role === "manager") return "medium";
     if (dev.impactScore > 300 && dev.avgBusinessImpact > 60) return "exceptional";
     if (dev.impactScore > 150) return "high";
@@ -178,7 +283,7 @@ export class ScoringEngine {
     return "growing";
   }
 
-  private generateInsights(dev: DeveloperProfile): string[] {
+  public generateInsights(dev: DeveloperProfile): string[] {
     const insights: string[] = [];
 
     if (dev.role === "manager") {
@@ -224,7 +329,7 @@ export class ScoringEngine {
     return insights;
   }
 
-  private buildLeaderboard(profiles: DeveloperProfile[]): LeaderboardEntry[] {
+  public buildLeaderboard(profiles: DeveloperProfile[]): LeaderboardEntry[] {
     return profiles
       .filter((d) => d.role === "developer" && isResolvableContributorKey(d.login))
       .sort((a, b) => b.impactScore - a.impactScore)
@@ -244,7 +349,7 @@ export class ScoringEngine {
     return undefined;
   }
 
-  private generateTeamInsights(
+  public generateTeamInsights(
     profiles: DeveloperProfile[],
     repos: RepoConfig[],
   ): TeamInsight[] {
@@ -297,5 +402,66 @@ export class ScoringEngine {
     }
 
     return insights;
+  }
+
+  /**
+   * After merging wide org commits with scoped AI, rebuild developers/leaderboard from the merged
+   * commit list so per-author counts match the Commits tab. Preserves review totals from `wideDevelopers`.
+   */
+  static rollupMergedWideScoped(
+    mergedAnalyzedCommits: AnalyzedCommit[],
+    repos: RepoConfig[],
+    wideDevelopers: DeveloperProfile[],
+  ): {
+    developers: DeveloperProfile[];
+    leaderboard: LeaderboardEntry[];
+    topContributor: LeaderboardEntry | null;
+    teamInsights: TeamInsight[];
+  } {
+    const engine = new ScoringEngine();
+    const deduped = dedupeAnalyzedCommitsByRepoSha(mergedAnalyzedCommits);
+    const emptyData: MultiRepoData = {
+      repos,
+      commits: [],
+      pullRequests: [],
+      reviews: [],
+      fetchedAt: new Date().toISOString(),
+    };
+    const fromCommits = engine.buildProfiles(deduped, emptyData);
+    const map = new Map(fromCommits.map((p) => [p.login.toLowerCase(), p]));
+    const extras: DeveloperProfile[] = [];
+    for (const w of wideDevelopers) {
+      const p = map.get(w.login.toLowerCase());
+      if (p) {
+        p.totalReviews = w.totalReviews;
+        p.prsApproved = w.prsApproved;
+        p.role = w.role;
+      } else {
+        extras.push({ ...w });
+      }
+    }
+    const combined = [...fromCommits, ...extras];
+    for (const dev of combined) {
+      const analyzedWithScore = dev.commits.filter((c) => c.analysis && !c.isMergeCommit);
+      if (analyzedWithScore.length > 0) {
+        dev.avgBusinessImpact = Math.round(
+          analyzedWithScore.reduce((s, c) => s + (c.analysis?.business_impact_score ?? 0), 0) /
+            analyzedWithScore.length,
+        );
+      } else {
+        dev.avgBusinessImpact = 0;
+      }
+      dev.impactScore = Math.round(dev.impactScore);
+      dev.tier = engine.assignTier(dev);
+      dev.insights = engine.generateInsights(dev);
+    }
+    combined.sort((a, b) => b.impactScore - a.impactScore);
+    const leaderboard = engine.buildLeaderboard(combined);
+    return {
+      developers: combined,
+      leaderboard,
+      topContributor: leaderboard[0] ?? null,
+      teamInsights: engine.generateTeamInsights(combined, repos),
+    };
   }
 }

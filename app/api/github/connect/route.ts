@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { GitHubService } from "@/lib/github-service";
+import { getUserId, isAnalysisDbConfigured, saveReposFromConfigs } from "@/lib/db";
 import type { RepoConfig } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -23,6 +24,17 @@ export async function POST(request: Request) {
 
     if (!connection.valid) {
       return NextResponse.json({ error: "Invalid GitHub token" }, { status: 401 });
+    }
+
+    if (isAnalysisDbConfigured() && repos?.length) {
+      const uid = getUserId(token);
+      if (uid) {
+        try {
+          await saveReposFromConfigs(uid, repos);
+        } catch {
+          /* non-fatal */
+        }
+      }
     }
 
     return NextResponse.json({
