@@ -326,8 +326,9 @@ export default function CommitAnalysisTable({
       {withAiCount === 0 && baseCommits.length > 0 && !showAiFailureCallout && !configured ? (
         <div className="glass-surface p-6 text-center text-sm text-gray-400">
           <p>
-            Showing GitHub commits only. Add <code className="text-zinc-400">OPENROUTER_API_KEY</code> and
-            use <strong className="text-zinc-300">Run AI analysis</strong> to score commits.
+            Showing GitHub commits only. Set <code className="text-zinc-400">OPENROUTER_API_KEY</code> on the
+            API server (devimpact-backend) and use <strong className="text-zinc-300">Run AI analysis</strong>{" "}
+            to score commits.
           </p>
         </div>
       ) : null}

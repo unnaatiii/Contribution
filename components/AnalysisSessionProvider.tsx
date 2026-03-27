@@ -19,6 +19,7 @@ import {
   mergeAnalysisCachePreferDatabase,
 } from "@/lib/analysis-cache";
 import { clearActiveContributorsCache } from "@/lib/active-contributors-cache";
+import { backendApiUrl } from "@/lib/backend-url";
 import {
   SESSION_AI_CACHE_KEY,
   SESSION_ANALYSIS_HISTORY_KEY,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/session-keys";
 import { mergeWideAndScopedAi } from "@/lib/merge-analysis-result";
 import { commitTableStats } from "@/lib/analyzed-commit-stats";
+import { optionalOpenRouterKeyForApi } from "@/lib/openrouter-client";
 
 export type SessionDisplayMode = "live" | "restored";
 
@@ -281,6 +283,8 @@ type AnalysisSessionValue = {
   dismissError: () => void;
   /** Supabase persistence (USER_ID_PEPPER + service role) — enables webhook commit polls. */
   databasePersistenceEnabled: boolean;
+  /** From GET /api/analysis/settings — null until first fetch. */
+  openRouterConfiguredOnBackend: boolean | null;
 };
 
 const AnalysisSessionContext = createContext<AnalysisSessionValue | null>(null);
@@ -310,6 +314,9 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
   const [hoveredProfile, setHoveredProfile] = useState<string | null>(null);
   const [lastAiConfig, setLastAiConfig] = useState<ConnectAnalysisConfig | null>(null);
   const [databasePersistenceEnabled, setDatabasePersistenceEnabled] = useState(false);
+  const [openRouterConfiguredOnBackend, setOpenRouterConfiguredOnBackend] = useState<boolean | null>(
+    null,
+  );
   const [displayMode, setDisplayMode] = useState<SessionDisplayMode>("live");
 
   /** Wide org commit list + scoped AI overlay, or a pure restored snapshot (no merge). */
@@ -342,14 +349,22 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
     let cancelled = false;
     (async () => {
       let dbEnabled = false;
+      let orConfigured: boolean | null = null;
       try {
-        const r = await fetch("/api/analysis/settings");
-        const j = (await r.json()) as { databasePersistenceEnabled?: boolean };
+        const r = await fetch(backendApiUrl("/api/analysis/settings"));
+        const j = (await r.json()) as {
+          databasePersistenceEnabled?: boolean;
+          openRouterConfigured?: boolean;
+        };
         dbEnabled = !!j.databasePersistenceEnabled;
+        orConfigured = typeof j.openRouterConfigured === "boolean" ? j.openRouterConfigured : null;
       } catch {
         /* ignore */
       }
-      if (!cancelled) setDatabasePersistenceEnabled(dbEnabled);
+      if (!cancelled) {
+        setDatabasePersistenceEnabled(dbEnabled);
+        setOpenRouterConfiguredOnBackend(orConfigured);
+      }
 
       try {
         const cfgRaw = sessionStorage.getItem(SESSION_CONFIG_KEY);
@@ -397,7 +412,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
 
         if (dbEnabled && parsedCfg?.token && parsedCfg.repos?.length) {
           try {
-            const cacheRes = await fetch("/api/analysis/ai-cache", {
+            const cacheRes = await fetch(backendApiUrl("/api/analysis/ai-cache"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ token: parsedCfg.token, repos: parsedCfg.repos }),
@@ -445,7 +460,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
         }
         if (dbEnabled && parsedCfg?.token) {
           try {
-            const runsRes = await fetch("/api/analysis/runs/list", {
+            const runsRes = await fetch(backendApiUrl("/api/analysis/runs/list"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ token: parsedCfg.token }),
@@ -557,7 +572,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
 
       try {
         const cacheSnapshot = analysisCache;
-        const res = await fetch("/api/load-base", {
+        const res = await fetch(backendApiUrl("/api/load-base"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -627,13 +642,15 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
       setLastAiConfig(cfg);
 
       try {
-        const res = await fetch("/api/analyze-impact", {
+        const openrouterOverride = optionalOpenRouterKeyForApi();
+        const res = await fetch(backendApiUrl("/api/analyze"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...cfg,
             analysisCache,
             commitLimitPerRepo: 200,
+            ...(openrouterOverride ? { openrouterApiKey: openrouterOverride } : {}),
           }),
         });
         const data = (await res.json()) as ApiSuccessBody & { error?: string };
@@ -654,6 +671,21 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
         } = data;
         const nextResult = normalizeAnalysisResult(resultOnly as AnalysisResult);
         const tableStats = commitTableStats(nextResult.analyzedCommits);
+        const diag = nextResult.aiDiagnostics;
+        if (tableStats.nonMergeInView > 0 && tableStats.analyzedWithAi === 0) {
+          let msg: string;
+          if (diag && !diag.openrouterConfigured) {
+            msg =
+              "AI did not run: no OpenRouter key on the API server. Set OPENROUTER_API_KEY in devimpact-backend/.env and restart the backend, or for local dev only add NEXT_PUBLIC_OPENROUTER_API_KEY to my-app/.env.local.";
+          } else if (diag?.recentErrors?.length) {
+            msg = `OpenRouter did not return analyses. ${diag.recentErrors.slice(0, 2).join(" · ")} Check API key, credits (openrouter.ai), and model limits.`;
+          } else {
+            msg =
+              "No commits received AI scores in this run. Verify OPENROUTER_API_KEY, account credits, and try a smaller date range.";
+          }
+          setError(msg);
+          setErrorSource("ai");
+        }
 
         const runId = analysisRunId ?? crypto.randomUUID();
         const historyEntry: AnalysisHistoryEntry = {
@@ -735,7 +767,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
 
       if (databasePersistenceEnabled && tok) {
         try {
-          const res = await fetch("/api/analysis/runs/restore", {
+          const res = await fetch(backendApiUrl("/api/analysis/runs/restore"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ token: tok, runId: historyId }),
@@ -868,6 +900,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
       retryLastOperation,
       dismissError,
       databasePersistenceEnabled,
+      openRouterConfiguredOnBackend,
     }),
     [
       bootstrapped,
@@ -895,6 +928,7 @@ export function AnalysisSessionProvider({ children }: { children: React.ReactNod
       retryLastOperation,
       dismissError,
       databasePersistenceEnabled,
+      openRouterConfiguredOnBackend,
     ],
   );
 
