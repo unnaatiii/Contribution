@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Bell } from "lucide-react";
+import { backendApiUrl } from "@/lib/backend-url";
 
 type CommitRow = {
   repo: string;
@@ -121,7 +122,7 @@ export default function CommitNotificationBell({
         }
       }
 
-      const res = await fetch("/api/commits/notifications", {
+      const res = await fetch(backendApiUrl("/api/commits/notifications"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, sinceIso, lastKnownAiBatchVersion: lastKnown }),

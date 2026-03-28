@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, GitBranch } from "lucide-react";
 import type { AnalyzedCommit, RepoConfig } from "@/lib/types";
 import { useAnalysisSession } from "@/components/AnalysisSessionProvider";
 import { formatCommitDateTime } from "@/lib/format-commit-date";
+import { backendApiUrl } from "@/lib/backend-url";
 
 const PAGE_SIZE = 10;
 
@@ -33,7 +34,7 @@ export default function RepoPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/data/repos-sync-status", {
+        const res = await fetch(backendApiUrl("/api/data/repos-sync-status"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token: tok, repos }),

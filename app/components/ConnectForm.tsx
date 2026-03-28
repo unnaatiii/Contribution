@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { GitBranch, Key, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import type { RepoConfig } from "@/lib/types";
 import { orgWideHistoryDateRange, validateWideDashboardDateRange } from "@/lib/date-range";
+import { backendApiUrl } from "@/lib/backend-url";
 
 export type ConnectAnalysisConfig = {
   token: string;
@@ -59,7 +60,7 @@ export default function ConnectForm({ onConnected }: ConnectFormProps) {
     setMessage("Listing repositories and loading your dashboard…");
 
     try {
-      const listRes = await fetch("/api/github/list-repos", {
+      const listRes = await fetch(backendApiUrl("/api/github/list-repos"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: token.trim() }),
@@ -88,7 +89,7 @@ export default function ConnectForm({ onConnected }: ConnectFormProps) {
         return;
       }
 
-      const connectRes = await fetch("/api/github/connect", {
+      const connectRes = await fetch(backendApiUrl("/api/github/connect"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: token.trim(), repos: parsedRepos }),

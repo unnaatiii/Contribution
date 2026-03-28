@@ -13,6 +13,7 @@ import {
 } from "@/lib/active-contributors-cache";
 import { developerProfileForGraphLogin, profileKeyMatchesContributorLogin } from "@/lib/commit-author";
 import type { DeveloperProfile } from "@/lib/types";
+import { backendApiUrl } from "@/lib/backend-url";
 
 type RangeMode = "active" | "lifetime";
 
@@ -124,7 +125,7 @@ export default function DevelopersPage() {
 
     void (async () => {
       try {
-        const res = await fetch("/api/github/repo-contributors", {
+        const res = await fetch(backendApiUrl("/api/github/repo-contributors"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token: tok, repos }),
@@ -197,7 +198,7 @@ export default function DevelopersPage() {
 
     void (async () => {
       try {
-        const res = await fetch("/api/github/repo-collaborators", {
+        const res = await fetch(backendApiUrl("/api/github/repo-collaborators"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token: tok, repos }),

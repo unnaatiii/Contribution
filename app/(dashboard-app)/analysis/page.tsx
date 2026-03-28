@@ -16,6 +16,7 @@ import type { ConnectAnalysisConfig } from "@/app/components/ConnectForm";
 import type { RepoConfig } from "@/lib/types";
 import { defaultAnalysisDateRange, toYMD, validateAnalysisDateRange } from "@/lib/date-range";
 import { commitTableStats } from "@/lib/analyzed-commit-stats";
+import { optionalOpenRouterKeyForApi } from "@/lib/openrouter-client";
 
 function fullName(r: RepoConfig): string {
   return `${r.owner}/${r.repo}`;
@@ -32,6 +33,7 @@ export default function AnalysisPage() {
     applyAnalysisHistoryRun,
     historyRunHasSnapshot,
     analysisSnapshots,
+    openRouterConfiguredOnBackend,
   } = useAnalysisSession();
   const defaultRange = useMemo(() => defaultAnalysisDateRange(), []);
   const [dateFrom, setDateFrom] = useState(defaultRange.dateFrom);
@@ -125,6 +127,9 @@ export default function AnalysisPage() {
 
   const busy = submitting || phase === "analyzing_ai";
   const analyzing = phase === "analyzing_ai";
+  const clientOpenRouter = Boolean(optionalOpenRouterKeyForApi());
+  const showOpenRouterHint =
+    openRouterConfiguredOnBackend === false && !clientOpenRouter;
 
   const onHistoryClick = async (historyId: string) => {
     const ok = await applyAnalysisHistoryRun(historyId);
@@ -176,6 +181,21 @@ export default function AnalysisPage() {
               </Link>{" "}
               leaderboard. Past runs are on the right — click one to reopen that snapshot in Insights.
             </p>
+            {showOpenRouterHint ? (
+              <div
+                className="mt-4 rounded-xl border border-amber-500/40 bg-amber-950/40 px-4 py-3 text-sm text-amber-100/95 leading-relaxed"
+                role="status"
+              >
+                <strong className="text-amber-50">OpenRouter is not configured on the API server.</strong>{" "}
+                Runs will finish but every commit will show{" "}
+                <span className="text-amber-200/90">0 analyzed</span>. Add{" "}
+                <code className="text-xs bg-black/30 px-1.5 py-0.5 rounded">OPENROUTER_API_KEY</code> to{" "}
+                <code className="text-xs bg-black/30 px-1.5 py-0.5 rounded">devimpact-backend/.env</code>{" "}
+                and restart the backend, or for local dev only set{" "}
+                <code className="text-xs bg-black/30 px-1.5 py-0.5 rounded">NEXT_PUBLIC_OPENROUTER_API_KEY</code>{" "}
+                in <code className="text-xs bg-black/30 px-1.5 py-0.5 rounded">my-app/.env.local</code>.
+              </div>
+            ) : null}
           </div>
 
           <div
