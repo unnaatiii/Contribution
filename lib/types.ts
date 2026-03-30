@@ -77,6 +77,9 @@ export interface AnalyzedCommit {
   repoLabel: string;
   repoType: "frontend" | "backend" | "erp";
   filesChanged: string[];
+  /** From GitHub diff when available */
+  additions?: number;
+  deletions?: number;
   isMergeCommit: boolean;
   analysis: AICommitAnalysis | null;
   modelUsed: string;

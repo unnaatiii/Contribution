@@ -27,7 +27,7 @@ export default function DashboardAppLayout({ children }: { children: React.React
   if (phase === "loading_data") {
     return (
       <div className="analyzing-phase-root min-h-screen flex items-center justify-center p-6 bg-slate-950">
-        <div className="glass-surface max-w-md w-full p-8 text-center animate-fade-rise">
+        <div className="glass-surface max-w-md w-full p-8 text-center animate-[fade-rise_1.5s_ease-out]">
           <Loader2 className="w-10 h-10 text-purple-400 animate-spin mx-auto mb-6" />
           <h2 className="text-2xl font-semibold text-white mb-2">Refreshing from GitHub</h2>
           <p className="text-sm text-gray-400 leading-relaxed">{progress}</p>

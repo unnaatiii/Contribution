@@ -151,7 +151,7 @@
 }
 
 .animate-fade-rise {
-  animation: fade-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fade-rise 1.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .animate-subtle-glow {
@@ -546,6 +546,79 @@
   animation-delay: 180ms;
 }
 
+/* Landing: purple canvas + drift; neon ring runs opposite direction on hover vs idle */
+@keyframes landing-purple-bg-drift {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes landing-cat-ring-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.landing-purple-canvas {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 42%, rgba(139, 92, 246, 0.35) 0%, transparent 55%),
+    linear-gradient(125deg, #1e0b4a 0%, #4c1d95 22%, #6d28d9 45%, #3b0764 68%, #1a0a2e 100%);
+  background-size: 100% 100%, 220% 220%;
+  background-position:
+    center,
+    0% 50%;
+  animation: landing-purple-bg-drift 16s ease-in-out infinite alternate;
+}
+
+.landing-cat-neon {
+  position: absolute;
+  inset: -14px;
+  border-radius: 1.95rem;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(192, 132, 252, 0.15) 100deg,
+    rgba(168, 85, 247, 0.95) 200deg,
+    rgba(217, 70, 239, 0.5) 280deg,
+    transparent 360deg
+  );
+  /* Idle: spin opposite to typical bg drift feel */
+  animation: landing-cat-ring-spin 6s linear infinite reverse;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  filter: blur(1px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.landing-cat-wrap:hover .landing-cat-neon {
+  opacity: 1;
+  /* Hover: opposite direction from idle */
+  animation: landing-cat-ring-spin 4.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-purple-canvas {
+    animation: none;
+    background-size: 100% 100%, 100% 100%;
+  }
+  .landing-cat-neon {
+    animation: none;
+    opacity: 0.4;
+  }
+}
+
+/* ~+1px vs 16px default — scales all rem-based Tailwind text across the app */
+html {
+  font-size: 106.25%;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -658,4 +731,24 @@ body {
 .magic-nav-container .magic-nav-link:nth-child(5):focus-visible ~ .magic-nav-line {
   opacity: 1;
   left: calc(4 * (var(--magic-slot) + var(--magic-gap)));
+}
+@keyframes float0 {
+  0% { transform: translate(0px, 0px) rotate(0deg); }
+  25% { transform: translate(20px, -30px) rotate(4deg); }
+  50% { transform: translate(-15px, 20px) rotate(-3deg); }
+  75% { transform: translate(10px, -10px) rotate(2deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+
+@keyframes float1 {
+  0% { transform: translate(0px, 0px) rotate(0deg); }
+  30% { transform: translate(-25px, 15px) rotate(-5deg); }
+  60% { transform: translate(20px, -20px) rotate(3deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+
+@keyframes float2 {
+  0% { transform: translate(0px, 0px); }
+  50% { transform: translate(30px, 25px); }
+  100% { transform: translate(0px, 0px); }
 }

@@ -201,7 +201,11 @@ export default function InsightSummaryCards({ result, headingDetail }: InsightSu
             </>
           );
 
-          const shell = `relative glass-surface glass-surface--lift p-5 animate-fade-rise ${s.border} ${s.ring}`;
+          const shell = `relative glass-surface glass-surface--lift p-5 animate-fade-rise 
+transition-all duration-300 
+hover:shadow-green-glow 
+hover:border-emerald-400/50 
+hover:-translate-y-1 ${s.border} ${s.ring}`;
 
           if (c.dev) {
             return (

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="240" height="160" aria-hidden="true">
+  <!-- Placeholder sleeping black cat  replace with landing-cat-sleep.png in ConnectLanding.tsx -->
+  <ellipse cx="120" cy="95" rx="72" ry="44" fill="#0c0c0c"/>
+  <ellipse cx="75" cy="78" rx="34" ry="30" fill="#0c0c0c"/>
+  <path d="M52 58 L58 42 L68 58 Z" fill="#0c0c0c"/>
+  <path d="M68 56 L74 40 L84 56 Z" fill="#0c0c0c"/>
+  <ellipse cx="82" cy="72" rx="5" ry="6" fill="#2e1065" opacity="0.5"/>
+  <path d="M95 88 Q120 82 145 88" stroke="#1a1a1a" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>

@@ -142,7 +142,15 @@ export default function RepoPage() {
                         {slice.map((c) => (
                           <li
                             key={c.sha}
-                            className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm"
+                            className="rounded-xl 
+               border border-white/10 
+               bg-white/[0.03] 
+               px-3 py-2.5 text-sm 
+               transition-all duration-300 
+               hover:border-yellow-400/60 
+               hover:bg-yellow-400/5 
+               hover:shadow-[0_0_20px_rgba(250,204,21,0.35),0_0_40px_rgba(250,204,21,0.15)] 
+               hover:scale-[1.01]"
                           >
                             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                               <span className="text-[11px] text-zinc-400 tabular-nums">

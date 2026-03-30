@@ -9,3 +9,5 @@ export const SESSION_ANALYSIS_SNAPSHOTS_KEY = "devimpact-analysis-snapshots";
 export const SESSION_WIDE_BASE_KEY = "devimpact-wide-base";
 /** `live` = merge wide org + latest scoped AI; `restored` = show a saved history snapshot only. */
 export const SESSION_DISPLAY_MODE_KEY = "devimpact-display-mode";
+/** Set when opening rank #1 on Impact Leaderboard; confetti runs after profile hero animation completes. */
+export const SESSION_LEADERBOARD_CONFETTI_RANK1_KEY = "devimpact-confetti-rank1";

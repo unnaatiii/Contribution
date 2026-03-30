@@ -8,9 +8,11 @@ import {
   CheckSquare,
   History,
   Loader2,
+  Search,
   Sparkles,
   Square,
 } from "lucide-react";
+import { DarkDatePickerField } from "@/components/DarkDatePicker";
 import { useAnalysisSession } from "@/components/AnalysisSessionProvider";
 import type { ConnectAnalysisConfig } from "@/app/components/ConnectForm";
 import type { RepoConfig } from "@/lib/types";
@@ -41,8 +43,18 @@ export default function AnalysisPage() {
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [localError, setLocalError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [repoSearch, setRepoSearch] = useState("");
 
   const allRepos = wideSnapshot?.config.repos ?? [];
+
+  const filteredRepos = useMemo(() => {
+    const q = repoSearch.trim().toLowerCase();
+    if (!q) return allRepos;
+    return allRepos.filter((r) => {
+      const fn = fullName(r).toLowerCase();
+      return fn.includes(q) || r.label.toLowerCase().includes(q);
+    });
+  }, [allRepos, repoSearch]);
   const token = wideSnapshot?.config.token ?? "";
 
   const selectedSet = useMemo(() => {
@@ -222,8 +234,22 @@ export default function AnalysisPage() {
             </button>
           </div>
         </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search by repo name or label…"
+            value={repoSearch}
+            onChange={(e) => setRepoSearch(e.target.value)}
+            className="w-full pl-10 pr-3 py-2.5 rounded-xl text-sm bg-black/35 border border-white/10 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-purple-500/35 mb-2"
+            aria-label="Search repositories"
+          />
+        </div>
         <div className="max-h-[280px] overflow-y-auto rounded-xl border border-white/10 divide-y divide-white/5">
-          {allRepos.map((r) => {
+          {filteredRepos.length === 0 ? (
+            <p className="px-3 py-6 text-sm text-zinc-500 text-center">No repositories match your search.</p>
+          ) : null}
+          {filteredRepos.map((r) => {
             const fn = fullName(r);
             const on = selectedSet.has(fn);
             return (
@@ -268,27 +294,14 @@ export default function AnalysisPage() {
           ))}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1">From</label>
-            <input
-              type="date"
-              value={dateFrom}
-              max={dateTo}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-sm bg-black/40 border border-white/15 text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1">To</label>
-            <input
-              type="date"
-              value={dateTo}
-              min={dateFrom}
-              max={todayYmd}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl text-sm bg-black/40 border border-white/15 text-white"
-            />
-          </div>
+          <DarkDatePickerField label="From" value={dateFrom} max={dateTo} onChange={setDateFrom} />
+          <DarkDatePickerField
+            label="To"
+            value={dateTo}
+            min={dateFrom}
+            max={todayYmd}
+            onChange={setDateTo}
+          />
         </div>
       </div>
 

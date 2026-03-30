@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, startTransition } from "react";
+import { useState, useEffect, useCallback, useRef, startTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -21,7 +21,12 @@ import {
   GitMerge,
 } from "lucide-react";
 import type { AnalysisResult, DeveloperProfile, AnalyzedCommit } from "@/lib/types";
-import { SESSION_RESULT_KEY, SESSION_WIDE_BASE_KEY } from "@/lib/session-keys";
+import {
+  SESSION_LEADERBOARD_CONFETTI_RANK1_KEY,
+  SESSION_RESULT_KEY,
+  SESSION_WIDE_BASE_KEY,
+} from "@/lib/session-keys";
+import { fireLeaderboardMeetConfetti } from "@/lib/leaderboard-confetti";
 import { useAnalysisSession } from "@/components/AnalysisSessionProvider";
 import {
   canonicalizeContributorKey,
@@ -126,7 +131,7 @@ function ProfileSection({
 
 function ProfileSkeleton({ theme }: { theme: { primary: string } }) {
   return (
-    <div className="min-h-screen p-6 space-y-6 animate-pulse">
+    <div className="min-h-screen p-6 space-y-6 animate-[pulse_3s_ease-in-out_infinite]">
       <div
         className="h-14 w-40 rounded-2xl bg-white/5"
         style={{ boxShadow: `0 0 40px ${theme.primary}22` }}
@@ -161,6 +166,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
   const [gate, setGate] = useState<"pending" | "expand" | "ready">("pending");
   const [payload, setPayload] = useState<ProfileTransitionPayload | null>(null);
   const [leaving, setLeaving] = useState(false);
+  const confettiRank1HandledRef = useRef(false);
 
   useEffect(() => {
     const p = readProfileTransition(devName);
@@ -171,6 +177,7 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
   useEffect(() => {
     setTimelineFilter("all");
     setExpandedSha(null);
+    confettiRank1HandledRef.current = false;
   }, [devName]);
 
   useEffect(() => {
@@ -253,6 +260,33 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
     clearProfileTransition();
     setGate("ready");
   }, []);
+
+  const onProfileHeroAnimationComplete = useCallback(() => {
+    if (confettiRank1HandledRef.current || !developer) return;
+    let pending = false;
+    try {
+      const raw = sessionStorage.getItem(SESSION_LEADERBOARD_CONFETTI_RANK1_KEY);
+      if (!raw) return;
+      let login: string | undefined;
+      try {
+        const o = JSON.parse(raw) as unknown;
+        if (o && typeof o === "object" && "login" in o && typeof (o as { login: unknown }).login === "string") {
+          login = (o as { login: string }).login;
+        }
+      } catch {
+        sessionStorage.removeItem(SESSION_LEADERBOARD_CONFETTI_RANK1_KEY);
+        return;
+      }
+      if (!login || login.toLowerCase() !== developer.login.toLowerCase()) return;
+      sessionStorage.removeItem(SESSION_LEADERBOARD_CONFETTI_RANK1_KEY);
+      pending = true;
+    } catch {
+      return;
+    }
+    if (!pending) return;
+    confettiRank1HandledRef.current = true;
+    fireLeaderboardMeetConfetti();
+  }, [developer]);
 
   if (gate === "pending") {
     return <ProfileSkeleton theme={theme} />;
@@ -447,17 +481,27 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
             style={{
               boxShadow: `0 0 80px -20px ${theme.glow}`,
             }}
+            onAnimationComplete={onProfileHeroAnimationComplete}
           >
             <div
               className="absolute -top-24 -right-24 w-64 h-64 rounded-full blur-3xl opacity-40 pointer-events-none"
               style={{ background: theme.primary }}
             />
             <div className="relative flex flex-col md:flex-row md:items-center gap-6">
-              <img
-                src={developer.avatar_url}
-                alt=""
-                className="w-24 h-24 md:w-28 md:h-28 rounded-3xl ring-2 ring-white/15 object-cover shadow-xl"
-              />
+            <div className="relative w-24 h-24 md:w-28 md:h-28 
+                hover:shadow-[0_0_25px_var(--dev-color)] transition-all duration-300">
+  
+  <img
+    src={developer.avatar_url}
+    alt=""
+    className="w-full h-full rounded-3xl object-cover ring-2 ring-white/15"
+  />
+
+  {/* Animated border */}
+  <div className="absolute inset-0 rounded-3xl 
+                  border-2 border-[var(--dev-color)] 
+                  animate-pulse opacity-60" />
+</div>
               <div className="flex-1">
                 <h2 className="text-3xl font-bold text-white tracking-tight">
                   {contributorDisplayLabel(developer.login)}
@@ -781,7 +825,13 @@ export default function DeveloperProfile({ devName }: { devName: string }) {
                         )}
 
                         {expanded && !commit.isMergeCommit && (
-                          <div className="border-t border-white/10 bg-zinc-900/40 p-4 space-y-4">
+                          <div className="border border-yellow-400/40 
+                bg-zinc-900/60 
+                rounded-xl 
+                p-5 
+                space-y-4 
+                shadow-[0_0_0_1px_rgba(250,204,21,0.15),0_10px_30px_rgba(0,0,0,0.6)] 
+                backdrop-blur-md">
                             <div>
                               <p className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
                                 Full commit message

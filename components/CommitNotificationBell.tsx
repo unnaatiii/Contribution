@@ -183,15 +183,28 @@ export default function CommitNotificationBell({
   const lines = useMemo(() => buildDisplayLines(list), [list]);
   const count = list.length;
 
-  if (!enabled || !token) return null;
+  if (!token?.trim()) return null;
+
+  const disabled = !enabled;
+  const bellTitle = disabled
+    ? "Live commit alerts need database sync (configure Supabase on the API + webhook)."
+    : "New commits synced via org webhook";
 
   return (
     <div className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="relative p-2.5 text-gray-400 hover:text-white rounded-[14px] bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 cursor-pointer"
-        title="New commits (org webhook)"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((o) => !o);
+        }}
+        className={`relative p-2.5 rounded-[14px] border border-white/10 transition-all duration-300 ${
+          disabled ?
+            "text-zinc-600 bg-white/[0.03] cursor-not-allowed opacity-80"
+          : "text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 cursor-pointer"
+        }`}
+        title={bellTitle}
         aria-expanded={open}
         aria-haspopup="true"
       >
@@ -203,7 +216,7 @@ export default function CommitNotificationBell({
         ) : null}
       </button>
 
-      {open ? (
+      {open && !disabled ? (
         <>
           <button
             type="button"
@@ -225,7 +238,9 @@ export default function CommitNotificationBell({
               ) : null}
             </div>
             {lines.length === 0 ? (
-              <p className="px-3 py-6 text-xs text-zinc-500 text-center">No new commits since this session.</p>
+              <p className="px-3 py-6 text-xs text-zinc-500 text-center">
+                No new commits since this session. Webhooks write to your synced database when enabled.
+              </p>
             ) : (
               <ul className="py-1">
                 {lines.map((line) => (

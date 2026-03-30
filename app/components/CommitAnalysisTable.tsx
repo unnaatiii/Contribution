@@ -2,15 +2,21 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Brain, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Brain, AlertCircle, Calendar, ChevronDown, ChevronUp, User } from "lucide-react";
 import type {
   AnalyzedCommit,
   AIAnalysisDiagnostics,
   ContributionType,
 } from "@/lib/types";
-import { formatCommitDateTime } from "@/lib/format-commit-date";
+import {
+  formatCommitDateTime,
+  formatCommitDateParts,
+  formatCommitRelativeShort,
+} from "@/lib/format-commit-date";
+import { uniqueFileExtensions } from "@/lib/commit-file-extensions";
 import { analyzedCommitRowKey, dedupeAnalyzedCommitsByRepoSha } from "@/lib/dedupe-analyzed-commits";
 import CommitsTimelineChart from "@/app/components/CommitsTimelineChart";
+import { DarkDateCalendar, DarkDatePickerField } from "@/components/DarkDatePicker";
 
 interface CommitAnalysisTableProps {
   analyzedCommits: AnalyzedCommit[];
@@ -82,6 +88,61 @@ function commitDayKeyLocal(iso: string): string | null {
   return `${y}-${m}-${day}`;
 }
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseYmdParam(v: string | null): string | null {
+  const t = v?.trim() ?? "";
+  return t && YMD_RE.test(t) ? t : null;
+}
+
+function commitYmdInRange(iso: string, fromYmd: string | null, toYmd: string | null): boolean {
+  const k = commitDayKeyLocal(iso);
+  if (!k) return true;
+  if (fromYmd && k < fromYmd) return false;
+  if (toYmd && k > toYmd) return false;
+  return true;
+}
+
+function messageTitleSubtitle(message: string): { title: string; subtitle: string } {
+  const lines = message
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return {
+    title: lines[0] ?? "",
+    subtitle: lines.slice(1).join(" ").trim(),
+  };
+}
+
+function authorGithubAvatarSrc(author: string): string | null {
+  const t = author.trim();
+  if (!t || t.includes("@")) return null;
+  if (/\s/.test(t)) return null;
+  if (t.length > 39) return null;
+  return `https://github.com/${encodeURIComponent(t)}.png?size=80`;
+}
+
+function CommitAvatar({ author }: { author: string }) {
+  const [broken, setBroken] = useState(false);
+  const src = authorGithubAvatarSrc(author);
+  const initials = (author.trim().slice(0, 2) || "?").toUpperCase();
+  if (!src || broken) {
+    return (
+      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-600 to-slate-800 ring-2 ring-white/10 flex items-center justify-center text-xs font-semibold text-white shrink-0">
+        {initials}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      className="w-10 h-10 rounded-full ring-2 ring-white/10 object-cover shrink-0 bg-slate-800"
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
 function sortCommits(rows: AnalyzedCommit[], mode: SortMode): AnalyzedCommit[] {
   const copy = [...rows];
   copy.sort((a, b) => {
@@ -133,6 +194,8 @@ export default function CommitAnalysisTable({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const [dayPickOpen, setDayPickOpen] = useState(false);
+  const [dayPickValue, setDayPickValue] = useState("");
 
   const setQuery = useCallback(
     (updates: Record<string, string | null | undefined>) => {
@@ -152,6 +215,9 @@ export default function CommitAnalysisTable({
     typeFilterRaw && isContributionType(typeFilterRaw) ? typeFilterRaw : null;
 
   const dayFilter = searchParams.get("day")?.trim() ?? null;
+
+  const cfrom = parseYmdParam(searchParams.get("cfrom"));
+  const cto = parseYmdParam(searchParams.get("cto"));
 
   const sortRaw = searchParams.get("sort")?.trim() ?? "";
   const sortMode: SortMode =
@@ -176,10 +242,15 @@ export default function CommitAnalysisTable({
     return baseCommits;
   }, [baseCommits, commitListFilter]);
 
+  const afterDateRange = useMemo(() => {
+    if (!cfrom && !cto) return afterListFilter;
+    return afterListFilter.filter((c) => commitYmdInRange(c.date, cfrom, cto));
+  }, [afterListFilter, cfrom, cto]);
+
   const commitsForTimeline = useMemo(() => {
-    if (!typeFilter) return afterListFilter;
-    return afterListFilter.filter((c) => c.analysis?.type === typeFilter);
-  }, [afterListFilter, typeFilter]);
+    if (!typeFilter) return afterDateRange;
+    return afterDateRange.filter((c) => c.analysis?.type === typeFilter);
+  }, [afterDateRange, typeFilter]);
 
   const rowCommits = useMemo(() => {
     let rows = commitsForTimeline;
@@ -237,6 +308,23 @@ export default function CommitAnalysisTable({
     withAiCount === 0 && configured && baseCommits.length > 0 && failures > 0;
 
   const withAiInView = rowCommits.filter((c) => c.analysis).length;
+
+  const todayYmd = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  const openDayPickerForCommit = useCallback(
+    (iso: string) => {
+      const k = commitDayKeyLocal(iso);
+      setDayPickValue(k ?? todayYmd);
+      setDayPickOpen(true);
+    },
+    [todayYmd],
+  );
 
   return (
     <div className="space-y-6">
@@ -315,6 +403,41 @@ export default function CommitAnalysisTable({
             </button>
           </div>
         </div>
+        <div className="min-w-[160px]">
+          <DarkDatePickerField
+            label="Commits from"
+            value={cfrom}
+            emptyLabel="Any"
+            calendarFallback={cto ?? todayYmd}
+            max={cto ?? todayYmd}
+            onChange={(v) => setQuery({ cfrom: v, day: null })}
+            onClear={() => setQuery({ cfrom: null, day: null })}
+          />
+        </div>
+        <div className="min-w-[160px]">
+          <DarkDatePickerField
+            label="Commits to"
+            value={cto}
+            emptyLabel="Any"
+            calendarFallback={cfrom ?? todayYmd}
+            min={cfrom ?? undefined}
+            max={todayYmd}
+            onChange={(v) => setQuery({ cto: v, day: null })}
+            onClear={() => setQuery({ cto: null, day: null })}
+          />
+        </div>
+        {(cfrom || cto) && (
+          <div className="flex flex-col gap-1 min-w-[100px] justify-end">
+            <span className="text-[10px] uppercase tracking-wider text-transparent select-none">.</span>
+            <button
+              type="button"
+              onClick={() => setQuery({ cfrom: null, cto: null, day: null })}
+              className="text-xs px-3 py-2 rounded-lg border border-white/15 bg-white/5 text-zinc-300 hover:bg-white/10 cursor-pointer"
+            >
+              Clear dates
+            </button>
+          </div>
+        )}
       </div>
 
       <CommitsTimelineChart
@@ -335,11 +458,11 @@ export default function CommitAnalysisTable({
 
       {rowCommits.length === 0 && baseCommits.length > 0 ? (
         <div className="glass-surface p-5 text-center text-sm text-zinc-400">
-          No commits match the current type or day filters.{" "}
+          No commits match the current filters.{" "}
           <button
             type="button"
             className="text-purple-400 hover:text-blue-300 underline cursor-pointer"
-            onClick={() => setQuery({ type: null, day: null })}
+            onClick={() => setQuery({ type: null, day: null, cfrom: null, cto: null })}
           >
             Clear filters
           </button>
@@ -375,19 +498,34 @@ export default function CommitAnalysisTable({
       ) : null}
 
       {rowCommits.length > 0 ?
-        <div className="glass-surface overflow-hidden p-0">
+        <div className="glass-surface overflow-hidden p-0 rounded-[20px]">
+          <div className="px-5 py-4 border-b border-white/10 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 bg-white/[0.02]">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-zinc-500">Live feed</p>
+              <h3 className="text-lg font-semibold text-white tracking-tight">Recent commits (stream)</h3>
+            </div>
+            <p className="text-xs text-zinc-500 sm:text-right">
+              Auto-updating · Showing latest {rowCommits.length} commit{rowCommits.length === 1 ? "" : "s"}
+              {(cfrom || cto) && (
+                <span className="block sm:inline text-zinc-600 sm:ml-1">
+                  {" "}(date filter: {cfrom ?? "…"} – {cto ?? "…"})
+                </span>
+              )}
+            </p>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 w-10 bg-white/[0.03]" aria-label="Expand" />
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">When</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Commit</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Repo</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Type</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Impact</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 bg-white/[0.03]">Score</th>
-                <th className="text-left text-xs font-medium text-gray-400 px-4 py-4 min-w-[200px] bg-white/[0.03]">
+                <th className="text-left text-xs font-medium text-gray-400 px-2 py-3 w-10 bg-white/[0.03]" aria-label="Expand" />
+                <th className="text-left text-xs font-medium text-gray-400 px-2 py-3 w-[5.5rem] bg-white/[0.03]">When</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-3 py-3 bg-white/[0.03] min-w-[min(100%,280px)]">
+                  Commit
+                </th>
+                <th className="text-left text-xs font-medium text-gray-400 px-3 py-3 w-[7rem] bg-white/[0.03]">Type</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-3 py-3 w-[5.5rem] bg-white/[0.03]">Impact</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-3 py-3 w-[4.5rem] bg-white/[0.03]">Score</th>
+                <th className="text-left text-xs font-medium text-gray-400 px-3 py-3 min-w-[180px] bg-white/[0.03]">
                   AI reasoning
                 </th>
               </tr>
@@ -397,13 +535,20 @@ export default function CommitAnalysisTable({
                 const a = commit.analysis;
                 const rowKey = commitRowKey(commit);
                 const expanded = expandedRowKey === rowKey;
+                const { title, subtitle: msgSub } = messageTitleSubtitle(commit.message);
+                const subtitle =
+                  msgSub ||
+                  (a?.reasoning ? (a.reasoning.split("\n")[0] ?? "").trim().slice(0, 220) : "");
+                const add = commit.additions ?? 0;
+                const del = commit.deletions ?? 0;
+                const { dateLine, timeLine } = formatCommitDateParts(commit.date);
                 return (
                   <Fragment key={rowKey}>
                     <tr
                       id={commitRowDomId(commit)}
                       className="border-b border-white/5 hover:bg-white/[0.04] align-top transition-colors duration-300 scroll-mt-24"
                     >
-                      <td className="px-3 py-3">
+                      <td className="px-2 py-3 align-top">
                         <button
                           type="button"
                           onClick={() => toggleExpand(rowKey)}
@@ -418,25 +563,88 @@ export default function CommitAnalysisTable({
                           )}
                         </button>
                       </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <p className="text-[11px] text-zinc-300 tabular-nums">
-                          {formatCommitDateTime(commit.date)}
-                        </p>
+                      <td className="px-2 py-3 align-top w-[5.5rem]">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDayPickerForCommit(commit.date);
+                          }}
+                          className="w-full text-left rounded-lg px-1 py-0.5 -mx-1 -my-0.5 hover:bg-violet-500/15 hover:ring-1 hover:ring-violet-500/30 transition-colors cursor-pointer"
+                          title="Pick a day to filter the table"
+                        >
+                          <p className="text-[11px] font-medium text-zinc-200 leading-tight flex items-center gap-1">
+                            {dateLine}
+                            <Calendar className="w-3 h-3 text-violet-400/45 shrink-0" aria-hidden />
+                          </p>
+                          <p className="text-[10px] text-zinc-500 tabular-nums mt-0.5">{timeLine}</p>
+                        </button>
                       </td>
-                      <td className="px-3 py-3 max-w-[220px]">
-                        <p className="text-white text-xs font-mono line-clamp-2">
-                          {commit.message.split("\n")[0]}
-                        </p>
-                        <p className="text-[10px] text-zinc-600 mt-0.5 font-mono">
-                          {commit.sha.substring(0, 7)} · {commit.author}
-                        </p>
+                      <td className="px-3 py-3 align-top min-w-0">
+                        <div className="flex gap-3 min-w-0">
+                          <CommitAvatar author={commit.author} />
+                          <div className="flex-1 min-w-0 space-y-1.5">
+                            <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                              <p className="text-sm text-white font-semibold leading-snug min-w-0 flex-1 [overflow-wrap:anywhere]">
+                                {title || "(no message)"}
+                              </p>
+                              <span
+                                className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.06] border border-white/10 text-zinc-300 font-mono shrink-0 max-w-[11rem] truncate"
+                                title={commit.repo}
+                              >
+                                {commit.repoLabel}
+                              </span>
+                            </div>
+                            {subtitle ? (
+                              <p className="text-xs text-zinc-500 leading-relaxed line-clamp-2">{subtitle}</p>
+                            ) : null}
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-400 min-w-0">
+                                <span className="inline-flex items-center gap-1 shrink-0">
+                                  <User className="w-3.5 h-3.5 text-sky-400 shrink-0" aria-hidden />
+                                  <span className="text-zinc-100 font-medium">{commit.author}</span>
+                                </span>
+                                <span className="text-zinc-600">·</span>
+                                <span className="text-zinc-500 tabular-nums shrink-0">
+                                  {formatCommitRelativeShort(commit.date)}
+                                </span>
+                                {(add > 0 || del > 0 || commit.filesChanged.length > 0) && (
+                                  <>
+                                    <span className="text-zinc-600">·</span>
+                                    <span className="text-zinc-500 font-mono tabular-nums">
+                                      {add > 0 || del > 0 ? (
+                                        <>
+                                          <span className="text-emerald-400/90">+{add}</span>{" "}
+                                          <span className="text-rose-400/90">-{del}</span>
+                                        </>
+                                      ) : null}
+                                      {commit.filesChanged.length > 0 ? (
+                                        <span>
+                                          {(add > 0 || del > 0 ? " · " : "") +
+                                            `${commit.filesChanged.length} file${commit.filesChanged.length === 1 ? "" : "s"}`}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </>
+                                )}
+                                <span className="text-zinc-600">·</span>
+                                <span className="text-zinc-500 font-mono text-[10px]">{commit.sha.slice(0, 7)}</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1 justify-end shrink-0">
+                                {uniqueFileExtensions(commit.filesChanged).map((ext) => (
+                                  <span
+                                    key={ext}
+                                    className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/[0.06] border border-white/10 text-zinc-400 font-mono"
+                                  >
+                                    {ext}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </td>
-                      <td className="px-3 py-3">
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-zinc-300">
-                          {commit.repoLabel}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3 align-top">
                         {a ? (
                           <span className={`text-[11px] font-medium ${typeColors[a.type] ?? "text-zinc-400"}`}>
                             {a.type}
@@ -445,7 +653,7 @@ export default function CommitAnalysisTable({
                           <span className="text-[11px] text-zinc-600">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3 align-top">
                         {a ? (
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded-full ${impactColors[a.impact_level] ?? impactColors.medium}`}
@@ -456,7 +664,7 @@ export default function CommitAnalysisTable({
                           <span className="text-[11px] text-zinc-600">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
+                      <td className="px-3 py-3 whitespace-nowrap align-top">
                         {a ? (
                           <>
                             <span className="text-xs font-bold text-white tabular-nums">
@@ -468,7 +676,7 @@ export default function CommitAnalysisTable({
                           <span className="text-[11px] text-zinc-600">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-3 max-w-[280px]">
+                      <td className="px-3 py-3 max-w-[min(100vw,320px)] align-top min-w-0">
                         {a ? (
                           <p className={`text-[11px] text-zinc-400 leading-relaxed ${expanded ? "" : "line-clamp-2"}`}>
                             {a.score_justification ?? a.reasoning}
@@ -479,9 +687,17 @@ export default function CommitAnalysisTable({
                       </td>
                     </tr>
                     {expanded && (
-                      <tr className="border-b border-white/5 bg-purple-500/[0.06]">
-                        <td colSpan={8} className="px-4 py-4">
-                          <div className="rounded-[16px] border border-white/10 bg-slate-950/80 backdrop-blur-xl p-5 space-y-3 shadow-inner">
+                      <tr className="border-b border-amber-500/15 bg-amber-950/[0.08]">
+                        <td colSpan={7} className="px-4 py-4">
+                          <div className="rounded-[18px] border-2 border-amber-400/55 bg-slate-950/90 backdrop-blur-xl p-5 space-y-3 shadow-[0_0_0_1px_rgba(250,204,21,0.12),0_12px_40px_-12px_rgba(0,0,0,0.65)] ring-1 ring-amber-300/20rounded-xl 
+               border border-white/10 
+               bg-white/[0.03] 
+               px-3 py-2.5 text-sm 
+               transition-all duration-300 
+               hover:border-yellow-400/60 
+               hover:bg-yellow-400/5 
+               hover:shadow-[0_0_20px_rgba(250,204,21,0.35),0_0_40px_rgba(250,204,21,0.15)] 
+               hover:scale-[1.01]">
                             <div className="flex flex-wrap items-center gap-2 text-xs">
                               <span className="text-zinc-500">Commit detail</span>
                               <span className="text-zinc-600">·</span>
@@ -575,6 +791,39 @@ export default function CommitAnalysisTable({
         </div>
       </div>
       : null}
+
+      {dayPickOpen ? (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+          onClick={() => setDayPickOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="relative rounded-2xl border border-violet-500/35 bg-[#07030f] p-4 shadow-2xl shadow-black max-w-[min(100vw,320px)] ring-1 ring-white/5"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="day-picker-title"
+          >
+            <p id="day-picker-title" className="text-sm font-medium text-white mb-1">
+              Filter by day
+            </p>
+            <p className="text-xs text-zinc-500 mb-3">Show commits on one calendar day (same as chart dots).</p>
+            <DarkDateCalendar
+              value={dayPickValue}
+              max={todayYmd}
+              onSelect={(ymd) => {
+                setQuery({ day: ymd });
+                setDayPickOpen(false);
+              }}
+              onClear={() => {
+                setQuery({ day: null });
+                setDayPickOpen(false);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

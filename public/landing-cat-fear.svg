@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" width="240" height="200" aria-hidden="true">
+  <!-- Placeholder startled black cat  replace with landing-cat-fear.png in ConnectLanding.tsx -->
+  <ellipse cx="120" cy="120" rx="58" ry="62" fill="#0c0c0c"/>
+  <ellipse cx="120" cy="62" rx="48" ry="44" fill="#0c0c0c"/>
+  <path d="M78 38 L88 12 L98 42 Z" fill="#0c0c0c"/>
+  <path d="M142 38 L152 12 L162 42 Z" fill="#0c0c0c"/>
+  <ellipse cx="98" cy="58" rx="10" ry="14" fill="#fafafa"/>
+  <ellipse cx="142" cy="58" rx="10" ry="14" fill="#fafafa"/>
+  <ellipse cx="100" cy="60" rx="4" ry="8" fill="#0c0c0c"/>
+  <ellipse cx="144" cy="60" rx="4" ry="8" fill="#0c0c0c"/>
+  <ellipse cx="120" cy="95" rx="16" ry="10" fill="#2e1065" opacity="0.4"/>
+</svg>
