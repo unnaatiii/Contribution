@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
-import { Activity, Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle, X } from "lucide-react";
 import ConnectForm from "@/app/components/ConnectForm";
 import { useAnalysisSession } from "@/components/AnalysisSessionProvider";
+import { connectWithGitHubToken } from "@/lib/connect-with-github-token";
 
 export default function ConnectLanding() {
   const router = useRouter();
@@ -15,38 +15,82 @@ export default function ConnectLanding() {
     result,
     error,
     progress,
-    runAnalysis,
+    loadBaseData,
     clearSessionAndGoConnect,
-    handleRefresh,
+    retryLastOperation,
     config,
   } = useAnalysisSession();
-  const auroraContainerRef = useRef<HTMLDivElement>(null);
+  const [oauthError, setOauthError] = useState("");
+  const [oauthConnecting, setOauthConnecting] = useState(false);
 
   useEffect(() => {
     if (!bootstrapped) return;
     if (result && phase === "done") {
-      router.replace("/insights");
+      router.replace("/repo");
     }
   }, [bootstrapped, result, phase, router]);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      const root = auroraContainerRef.current;
-      if (!root) return;
-      const x = (e.clientX / window.innerWidth - 0.5) * 40;
-      const y = (e.clientY / window.innerHeight - 0.5) * 40;
-      root.querySelectorAll(".aurora-parallax-wrap").forEach((wrap, i) => {
-        const depth = (i + 1) * 10;
-        (wrap as HTMLElement).style.transform = `translate(${x / depth}px, ${y / depth}px)`;
-      });
+    if (!bootstrapped) return;
+    if (result && phase === "analyzing_ai") {
+      router.replace("/analysis");
+    }
+  }, [bootstrapped, result, phase, router]);
+
+  useEffect(() => {
+    if (!bootstrapped) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const errParam = params.get("github_oauth_error");
+    if (errParam) {
+      setOauthError(decodeURIComponent(errParam.replace(/\+/g, " ")));
+      router.replace("/", { scroll: false });
+      return;
+    }
+
+    const isOauthSuccess = params.get("github_oauth") === "1";
+    if (isOauthSuccess) {
+      window.history.replaceState(null, "", window.location.pathname || "/");
+    } else {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setOauthConnecting(true);
+      try {
+        const r = await fetch("/api/auth/github/session");
+        const j = (await r.json()) as { access_token: string | null };
+        if (cancelled) return;
+        if (!j.access_token) {
+          setOauthError("GitHub did not return a token. Check OAuth app callback URL and env vars, then try again.");
+          setOauthConnecting(false);
+          return;
+        }
+        const resultConnect = await connectWithGitHubToken(j.access_token);
+        if (cancelled) return;
+        if (!resultConnect.ok) {
+          setOauthError(resultConnect.error);
+          setOauthConnecting(false);
+          return;
+        }
+        await loadBaseData(resultConnect.config);
+      } catch {
+        if (!cancelled) {
+          setOauthError("Something went wrong after GitHub login.");
+          setOauthConnecting(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
     };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, []);
+  }, [bootstrapped, loadBaseData, router]);
 
   if (!bootstrapped) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-[#1a0a2e]">
         <div className="relative">
           <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
           <div className="absolute inset-0 blur-xl bg-purple-500/20 rounded-full scale-150 -z-10" />
@@ -57,40 +101,37 @@ export default function ConnectLanding() {
 
   if (phase === "done" && result) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-[#1a0a2e]">
         <Loader2 className="w-10 h-10 text-purple-400 animate-spin" />
       </div>
     );
   }
 
-  if (phase === "analyzing") {
+  if (phase === "loading_data") {
     return (
-      <div className="analyzing-phase-root min-h-screen flex items-center justify-center p-6">
+      <div className="analyzing-phase-root min-h-screen flex items-center justify-center p-6 bg-[#1a0a2e]">
         <div className="glass-surface max-w-md w-full p-8 text-center animate-fade-rise">
-          <div className="analyzing-loader mx-auto mb-6" aria-hidden />
-          <h2 className="text-2xl font-semibold text-white mb-2">AI Analysis in Progress</h2>
+          <Loader2 className="w-10 h-10 text-purple-400 animate-spin mx-auto mb-6" />
+          <h2 className="text-2xl font-semibold text-white mb-2">Loading from GitHub</h2>
           <p className="text-sm text-gray-400 leading-relaxed">{progress}</p>
           <div className="mt-6 h-1.5 rounded-full bg-white/5 overflow-hidden shimmer-bar mx-auto max-w-xs" />
-          <div className="mt-6 flex items-center justify-center gap-2">
-            <div className="flex gap-1">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 animate-pulse"
-                  style={{ animationDelay: `${i * 200}ms` }}
-                />
-              ))}
-            </div>
-            <span className="text-xs text-gray-500">Fetching diffs & analyzing with AI...</span>
-          </div>
         </div>
+      </div>
+    );
+  }
+
+  if (phase === "analyzing_ai" && result) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#1a0a2e]">
+        <Loader2 className="w-10 h-10 text-purple-400 animate-spin mb-4" />
+        <p className="text-sm text-zinc-400 text-center">Opening analysis…</p>
       </div>
     );
   }
 
   if (phase === "error") {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="min-h-screen flex items-center justify-center p-6 bg-[#1a0a2e]">
         <div className="glass-surface max-w-md w-full p-8 text-center">
           <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
           <h2 className="text-2xl font-semibold text-white mb-2">Analysis Failed</h2>
@@ -106,7 +147,7 @@ export default function ConnectLanding() {
             {config && (
               <button
                 type="button"
-                onClick={handleRefresh}
+                onClick={() => void retryLastOperation()}
                 className="px-5 py-2.5 rounded-[20px] btn-gradient-saas font-medium text-sm cursor-pointer shadow-lg shadow-purple-500/20"
               >
                 Retry
@@ -118,83 +159,45 @@ export default function ConnectLanding() {
     );
   }
 
-  return (
-    <div className="relative isolate min-h-screen flex flex-col overflow-x-hidden">
-      <div className="landing-connect-bg fixed inset-0 z-0" aria-hidden />
-      <div ref={auroraContainerRef} className="aurora-container" aria-hidden>
-        <div className="aurora-parallax-wrap">
-          <div className="aurora aurora-1" />
-        </div>
-        <div className="aurora-parallax-wrap">
-          <div className="aurora aurora-2" />
-        </div>
-        <div className="aurora-parallax-wrap">
-          <div className="aurora aurora-3" />
+  if (oauthConnecting) {
+    return (
+      <div className="analyzing-phase-root min-h-screen flex items-center justify-center p-6 bg-[#1a0a2e]">
+        <div className="glass-surface max-w-md w-full p-8 text-center animate-fade-rise">
+          <Loader2 className="w-10 h-10 text-purple-400 animate-spin mx-auto mb-6" />
+          <h2 className="text-2xl font-semibold text-white mb-2">Finishing GitHub sign-in</h2>
+          <p className="text-sm text-gray-400 leading-relaxed">Listing your repositories and preparing the dashboard…</p>
+          <div className="mt-6 h-1.5 rounded-full bg-white/5 overflow-hidden shimmer-bar mx-auto max-w-xs" />
         </div>
       </div>
+    );
+  }
 
-      <header className="relative z-10 border-b border-white/10 px-6 py-4 bg-white/5 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-gradient-to-br from-blue-950/50 to-blue-600/25 ring-1 ring-white/10">
-            <Activity className="w-5 h-5 text-sky-300" />
+  return (
+    <div className="relative isolate min-h-screen flex flex-col overflow-x-hidden overflow-y-auto">
+      <div className="fixed inset-0 z-0 landing-purple-canvas" aria-hidden />
+
+      <div className="relative z-20 flex flex-col flex-1 w-full max-w-4xl mx-auto px-4 py-12 md:py-16 justify-center">
+        <h1 className="text-center text-3xl sm:text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-10 md:mb-12">
+          DevImpact Leaderboard
+        </h1>
+
+        {oauthError ? (
+          <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-500/35 bg-red-950/50 px-4 py-3 text-sm text-red-100 max-w-lg mx-auto w-full">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-red-400" />
+            <p className="min-w-0 flex-1 leading-relaxed">{oauthError}</p>
+            <button
+              type="button"
+              onClick={() => setOauthError("")}
+              className="shrink-0 p-1 rounded-lg hover:bg-white/10 text-red-200 cursor-pointer"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div>
-            <h1 className="text-lg font-semibold text-white">DevImpact AI</h1>
-            <p className="text-xs text-gray-400">Multi-Repo Developer Impact Analysis</p>
-          </div>
-        </div>
-      </header>
+        ) : null}
 
-      <main className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col items-center px-6 py-12 md:py-16">
-        <div className="w-full max-w-2xl shrink-0">
-          <motion.div
-            className="text-center mb-10 md:mb-12"
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4 tracking-tight">
-              Measure Real Impact
-            </h1>
-            <p className="text-gray-300 text-base md:text-lg max-w-xl mx-auto leading-relaxed">
-              Connect with your GitHub PAT, pick which repos to analyze, then get AI impact scoring
-              across commits and teams.
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 22 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.55, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <ConnectForm onConnected={runAnalysis} />
-          </motion.div>
-
-          <div className="mt-10 md:mt-12 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 max-w-2xl mx-auto">
-            {[
-              { label: "Multi-Repo", desc: "Cross-project" },
-              { label: "Deep AI", desc: "Diff analysis" },
-              { label: "Impact ROI", desc: "Business value" },
-              { label: "Team Intel", desc: "Dev vs Manager" },
-            ].map((item, i) => (
-              <motion.div
-                key={item.label}
-                initial={{ opacity: 0, y: 14 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: 0.45,
-                  delay: 0.2 + i * 0.07,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
-                className="text-center rounded-xl px-6 py-3 bg-white/5 backdrop-blur-lg border border-white/10 shadow-lg shadow-black/20 transition-all duration-300 hover:bg-white/10 hover:-translate-y-0.5 hover:border-white/15 hover:shadow-xl hover:shadow-blue-500/15"
-              >
-                <p className="text-sm font-medium text-white">{item.label}</p>
-                <p className="text-xs text-gray-400 mt-1">{item.desc}</p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </main>
+        <ConnectForm onConnected={loadBaseData} variant="landing" />
+      </div>
     </div>
   );
 }

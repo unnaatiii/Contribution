@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { motion } from "framer-motion";
 import type { DeveloperProfile } from "@/lib/types";
+import { contributorDisplayLabel } from "@/lib/commit-author";
 import { getThemeForLogin } from "@/hooks/useDeveloperTheme";
 import { recordDeveloperProfileTransition } from "@/animations/profileTransition";
 
@@ -23,6 +24,8 @@ export interface DeveloperCardProps {
   isSelected: boolean;
   hoveredLogin: string | null;
   onHoverLogin: (login: string | null) => void;
+  /** Lifetime view: not on GitHub contributors list for org repos */
+  inactive?: boolean;
 }
 
 const typeIcons: Record<string, React.ReactNode> = {
@@ -46,19 +49,21 @@ export default function DeveloperCard({
   isSelected,
   hoveredLogin,
   onHoverLogin,
+  inactive = false,
 }: DeveloperCardProps) {
   const breakdownEntries = Object.entries(developer.breakdown).filter(([, count]) => count > 0);
   const isDimmed = hoveredLogin !== null && hoveredLogin !== developer.login;
   const isHighlighted = hoveredLogin === developer.login;
   const href = `/developer/${encodeURIComponent(developer.login)}`;
   const theme = getThemeForLogin(developer.login);
+  const inactiveVisual = inactive && !isDimmed;
 
   return (
     <Link
       href={href}
       scroll={false}
       className={`block w-full text-left rounded-[20px] transition-all duration-300 ease-out outline-none focus-visible:ring-2 focus-visible:ring-purple-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#020617] ${
-        isDimmed ? "blur-[2.5px] opacity-[0.42] scale-[0.98]" : "opacity-100 scale-100"
+        isDimmed ? "blur-[2.5px] opacity-[0.42] scale-[0.98]" : inactiveVisual ? "opacity-55" : "opacity-100 scale-100"
       } ${isHighlighted ? "z-10 relative scale-[1.02] shadow-2xl shadow-purple-500/20" : ""}`}
       onMouseEnter={() => onHoverLogin(developer.login)}
       onClick={(e) => recordDeveloperProfileTransition(e.currentTarget, developer.login)}
@@ -92,7 +97,9 @@ export default function DeveloperCard({
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-white font-medium truncate">{developer.login}</span>
+              <span className="text-white font-medium truncate">
+                {contributorDisplayLabel(developer.login)}
+              </span>
               <span
                 className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
                   developer.role === "manager"
@@ -102,6 +109,11 @@ export default function DeveloperCard({
               >
                 {developer.role === "manager" ? "Manager" : "Developer"}
               </span>
+              {inactive && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-zinc-500/25 text-zinc-400 border border-white/10">
+                  Inactive
+                </span>
+              )}
               <span className="ml-auto flex items-center gap-0.5 text-[11px] font-medium shrink-0 text-sky-300">
                 Profile
                 <ChevronRight className="w-3.5 h-3.5" />

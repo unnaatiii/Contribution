@@ -77,6 +77,9 @@ export interface AnalyzedCommit {
   repoLabel: string;
   repoType: "frontend" | "backend" | "erp";
   filesChanged: string[];
+  /** From GitHub diff when available */
+  additions?: number;
+  deletions?: number;
   isMergeCommit: boolean;
   analysis: AICommitAnalysis | null;
   modelUsed: string;
@@ -140,6 +143,44 @@ export interface AnalysisResult {
   analysisWindow?: { from: string; to: string };
   /** GitHub logins included when analysis was restricted (same order as sent) */
   analysisAllowlist?: string[];
+  /** GitHub-only snapshot vs merged AI cache / fresh AI */
+  dataLayer?: "base" | "enhanced";
+  /** Any non-merge commit has AI analysis (from cache and/or this run) */
+  hasAiEnhancement?: boolean;
+}
+
+/** Persisted AI layer keyed by `owner/repo` and commit SHA */
+export type AnalysisCacheVersion = 1;
+
+export interface CachedCommitAi {
+  impactScore?: number;
+  type?: ContributionType;
+  summary?: string;
+  full?: AICommitAnalysis;
+  modelUsed?: string;
+  analyzedAt?: string;
+}
+
+export interface AnalysisCacheRepoBucket {
+  lastAnalyzedAt?: string;
+  commits: Record<string, CachedCommitAi>;
+}
+
+export interface AnalysisCache {
+  version: AnalysisCacheVersion;
+  repos: Record<string, AnalysisCacheRepoBucket>;
+}
+
+export interface AnalysisHistoryEntry {
+  /** Stable id for session snapshot lookup (new runs only; legacy entries get `legacy-${runAt}`). */
+  id?: string;
+  repos: string[];
+  dateRange: { from: string; to: string };
+  runAt: string;
+  /** Non-merge commits in that run after de-duplication (matches Commits tab). */
+  commitsInWindow?: number;
+  /** Subset of those with AI analysis. */
+  commitsAnalyzed?: number;
 }
 
 /** Client → analyze API: repos + optional OpenRouter override */
@@ -151,6 +192,10 @@ export interface AnalyzeImpactPayload {
   openrouterApiKey?: string;
   /** If set, only commits/reviews/PRs attributed to these logins are analyzed */
   allowedLogins?: string[];
+  /** Prior AI results; only missing SHAs are sent to the model */
+  analysisCache?: AnalysisCache;
+  /** Cap commits per repo after `listCommits` (newest first). Route defaults: load-base 2500 (clamped 10–10_000), analyze-impact 200 (clamped 5–500). */
+  commitLimitPerRepo?: number;
 }
 
 export interface TeamInsight {
